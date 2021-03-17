@@ -344,9 +344,10 @@ SYSCTL_NODE(_net, OID_AUTO, wg, CTLFLAG_RW, 0, "WireGuard");
 SYSCTL_INT(_net_wg, OID_AUTO, debug, CTLFLAG_RWTUN, &wireguard_debug, 0,
 	"enable debug logging");
 
-TASKQGROUP_DECLARE(if_io_tqg);
+static TASKQGROUP_DEFINE(wg_tqg, mp_ncpus, 1);
 
 MALLOC_DEFINE(M_WG, "WG", "wireguard");
+
 VNET_DEFINE_STATIC(struct if_clone *, wg_cloner);
 
 
@@ -495,17 +496,17 @@ wg_peer_alloc(struct wg_softc *sc)
 	wg_queue_init(&peer->p_decap_queue, "rxq");
 
 	GROUPTASK_INIT(&peer->p_send_initiation, 0, (gtask_fn_t *)wg_send_initiation, peer);
-	taskqgroup_attach(qgroup_if_io_tqg, &peer->p_send_initiation, peer, NULL, NULL, "wg initiation");
+	taskqgroup_attach(qgroup_wg_tqg, &peer->p_send_initiation, peer, NULL, NULL, "wg initiation");
 	GROUPTASK_INIT(&peer->p_send_keepalive, 0, (gtask_fn_t *)wg_send_keepalive, peer);
-	taskqgroup_attach(qgroup_if_io_tqg, &peer->p_send_keepalive, peer, NULL, NULL, "wg keepalive");
+	taskqgroup_attach(qgroup_wg_tqg, &peer->p_send_keepalive, peer, NULL, NULL, "wg keepalive");
 	GROUPTASK_INIT(&peer->p_clear_secrets, 0, (gtask_fn_t *)noise_remote_clear, &peer->p_remote);
-	taskqgroup_attach(qgroup_if_io_tqg, &peer->p_clear_secrets,
+	taskqgroup_attach(qgroup_wg_tqg, &peer->p_clear_secrets,
 	    &peer->p_remote, NULL, NULL, "wg clear secrets");
 
 	GROUPTASK_INIT(&peer->p_send, 0, (gtask_fn_t *)wg_deliver_out, peer);
-	taskqgroup_attach(qgroup_if_io_tqg, &peer->p_send, peer, NULL, NULL, "wg send");
+	taskqgroup_attach(qgroup_wg_tqg, &peer->p_send, peer, NULL, NULL, "wg send");
 	GROUPTASK_INIT(&peer->p_recv, 0, (gtask_fn_t *)wg_deliver_in, peer);
-	taskqgroup_attach(qgroup_if_io_tqg, &peer->p_recv, peer, NULL, NULL, "wg recv");
+	taskqgroup_attach(qgroup_wg_tqg, &peer->p_recv, peer, NULL, NULL, "wg recv");
 
 	wg_timers_init(&peer->p_timers);
 
@@ -623,11 +624,11 @@ wg_peer_destroy(struct wg_peer *peer)
 	GROUPTASK_DRAIN(&peer->p_recv);
 	GROUPTASK_DRAIN(&peer->p_send);
 
-	taskqgroup_detach(qgroup_if_io_tqg, &peer->p_clear_secrets);
-	taskqgroup_detach(qgroup_if_io_tqg, &peer->p_send_initiation);
-	taskqgroup_detach(qgroup_if_io_tqg, &peer->p_send_keepalive);
-	taskqgroup_detach(qgroup_if_io_tqg, &peer->p_recv);
-	taskqgroup_detach(qgroup_if_io_tqg, &peer->p_send);
+	taskqgroup_detach(qgroup_wg_tqg, &peer->p_clear_secrets);
+	taskqgroup_detach(qgroup_wg_tqg, &peer->p_send_initiation);
+	taskqgroup_detach(qgroup_wg_tqg, &peer->p_send_keepalive);
+	taskqgroup_detach(qgroup_wg_tqg, &peer->p_recv);
+	taskqgroup_detach(qgroup_wg_tqg, &peer->p_send);
 
 	wg_queue_deinit(&peer->p_decap_queue);
 	wg_queue_deinit(&peer->p_encap_queue);
@@ -3156,10 +3157,10 @@ crypto_taskq_setup(struct wg_softc *sc)
 	for (int i = 0; i < mp_ncpus; i++) {
 		GROUPTASK_INIT(&sc->sc_encrypt[i], 0,
 		     (gtask_fn_t *)wg_softc_encrypt, sc);
-		taskqgroup_attach_cpu(qgroup_if_io_tqg, &sc->sc_encrypt[i], sc, i, NULL, NULL, "wg encrypt");
+		taskqgroup_attach_cpu(qgroup_wg_tqg, &sc->sc_encrypt[i], sc, i, NULL, NULL, "wg encrypt");
 		GROUPTASK_INIT(&sc->sc_decrypt[i], 0,
 		    (gtask_fn_t *)wg_softc_decrypt, sc);
-		taskqgroup_attach_cpu(qgroup_if_io_tqg, &sc->sc_decrypt[i], sc, i, NULL, NULL, "wg decrypt");
+		taskqgroup_attach_cpu(qgroup_wg_tqg, &sc->sc_decrypt[i], sc, i, NULL, NULL, "wg decrypt");
 	}
 }
 
@@ -3167,8 +3168,8 @@ static void
 crypto_taskq_destroy(struct wg_softc *sc)
 {
 	for (int i = 0; i < mp_ncpus; i++) {
-		taskqgroup_detach(qgroup_if_io_tqg, &sc->sc_encrypt[i]);
-		taskqgroup_detach(qgroup_if_io_tqg, &sc->sc_decrypt[i]);
+		taskqgroup_detach(qgroup_wg_tqg, &sc->sc_encrypt[i]);
+		taskqgroup_detach(qgroup_wg_tqg, &sc->sc_decrypt[i]);
 	}
 	free(sc->sc_encrypt, M_WG);
 	free(sc->sc_decrypt, M_WG);
@@ -3210,7 +3211,7 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	sc->sc_decap_ring = buf_ring_alloc(MAX_QUEUED_PKT, M_WG, M_WAITOK, NULL);
 	GROUPTASK_INIT(&sc->sc_handshake, 0,
 	    (gtask_fn_t *)wg_softc_handshake_receive, sc);
-	taskqgroup_attach(qgroup_if_io_tqg, &sc->sc_handshake, sc, NULL, NULL, "wg tx initiation");
+	taskqgroup_attach(qgroup_wg_tqg, &sc->sc_handshake, sc, NULL, NULL, "wg tx initiation");
 	crypto_taskq_setup(sc);
 
 	wg_hashtable_init(&sc->sc_hashtable);
@@ -3263,14 +3264,14 @@ wg_clone_destroy(struct ifnet *ifp)
 	 */
 	NET_EPOCH_WAIT();
 
-	taskqgroup_drain_all(qgroup_if_io_tqg);
+	taskqgroup_drain_all(qgroup_wg_tqg);
 	sx_xlock(&sc->sc_lock);
 	wg_peer_remove_all(sc);
 	epoch_drain_callbacks(net_epoch_preempt);
 	sx_xunlock(&sc->sc_lock);
 	sx_destroy(&sc->sc_lock);
 	rw_destroy(&sc->sc_index_lock);
-	taskqgroup_detach(qgroup_if_io_tqg, &sc->sc_handshake);
+	taskqgroup_detach(qgroup_wg_tqg, &sc->sc_handshake);
 	crypto_taskq_destroy(sc);
 	buf_ring_free(sc->sc_encap_ring, M_WG);
 	buf_ring_free(sc->sc_decap_ring, M_WG);
