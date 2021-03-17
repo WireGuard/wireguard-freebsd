@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include <sys/limits.h>
 #include <sys/endian.h>
+#include <sys/socket.h>
 #include <sys/libkern.h>
 #include <sys/malloc.h>
 #include <sys/proc.h>
@@ -51,6 +52,20 @@ siphash24(const SIPHASH_KEY *key, const void *src, size_t len)
 
 	return (SipHashX(&ctx, 2, 4, (const uint8_t *)key, src, len));
 }
+
+#ifndef ARRAY_SIZE
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#endif
+
+#ifndef PRIV_NET_WG
+#define PRIV_NET_WG PRIV_NET_HWIOCTL
+#endif
+
+#ifndef IFT_WIREGUARD
+#define IFT_WIREGUARD IFT_PPP
+#endif
+
+int
+sogetsockaddr(struct socket *so, struct sockaddr **nam);
 
 #endif
