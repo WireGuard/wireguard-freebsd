@@ -6,4 +6,4 @@ There are a few changes that we had in-tree that we now don't, and will need to 
 - The `PRIV_NET_WG` privilege.
 - `sogetsockaddr` helper function, which belongs in `uipc_socket.c`.
 
-We're emulating these in support.h/support.c, but they should go away for the merge.
+We're emulating these in support.h, but they should go away for the merge.

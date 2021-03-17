@@ -2,6 +2,9 @@
  *
  * Copyright (C) 2021 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  * Copyright (C) 2021 Matt Dunwoodie <ncon@noconroy.net>
+ *
+ * support.h contains functions that are either not _yet_ upstream in FreeBSD 14, or are shimmed
+ * from OpenBSD. It is different from compat.h, which is strictly for backports.
  */
 
 #ifndef _WG_SUPPORT
@@ -15,6 +18,9 @@
 #include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/lock.h>
+#include <sys/socketvar.h>
+#include <sys/protosw.h>
+#include <net/vnet.h>
 #include <vm/uma.h>
 
 /* TODO the following is openbsd compat defines to allow us to copy the wg_*
@@ -65,7 +71,15 @@ siphash24(const SIPHASH_KEY *key, const void *src, size_t len)
 #define IFT_WIREGUARD IFT_PPP
 #endif
 
-int
-sogetsockaddr(struct socket *so, struct sockaddr **nam);
+static inline int
+sogetsockaddr(struct socket *so, struct sockaddr **nam)
+{
+	int error;
+
+	CURVNET_SET(so->so_vnet);
+	error = (*so->so_proto->pr_usrreqs->pru_sockaddr)(so, nam);
+	CURVNET_RESTORE();
+	return (error);
+}
 
 #endif

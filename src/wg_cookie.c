@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <sys/systm.h>
 #include <sys/param.h>
+#include <sys/lock.h>
 #include <sys/rwlock.h>
 #include <sys/malloc.h> /* Because systm doesn't include M_NOWAIT, M_DEVBUF */
 #include <sys/socket.h>
