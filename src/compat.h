@@ -67,5 +67,22 @@ static inline void taskqgroup_drain_all(struct taskqgroup *tqg)
 		gtaskqueue_drain_all(q);
 	}
 }
+#endif
 
+#if __FreeBSD_version < 1202000
+static inline uint32_t arc4random_uniform(uint32_t bound)
+{
+	uint32_t ret, max_mod_bound;
+
+	if (bound < 2)
+		return 0;
+
+	max_mod_bound = (1 + ~bound) % bound;
+
+	do {
+		ret = arc4random();
+	} while (ret < max_mod_bound);
+
+	return ret % bound;
+}
 #endif
