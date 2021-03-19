@@ -2906,15 +2906,7 @@ wg_marshal_peers(struct wg_softc *sc, nvlist_t **nvlp, nvlist_t ***nvl_arrayp, i
 
 	err = i = 0;
 	nvl_array = mallocarray(peer_count, sizeof(void *), M_TEMP, M_WAITOK | M_ZERO);
-	if (!nvl_array) {
-		err = ENOMEM;
-		goto out;
-	}
 	wpe = mallocarray(peer_count, sizeof(*wpe), M_TEMP, M_WAITOK | M_ZERO);
-	if (!wpe) {
-		err = ENOMEM;
-		goto out;
-	}
 
 	NET_EPOCH_ENTER(et);
 	CK_LIST_FOREACH(peer, &sc->sc_hashtable.h_peers_list, p_entry) {
