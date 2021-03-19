@@ -319,10 +319,6 @@ struct wg_softc {
 #define	ENOKEY	ENOTCAPABLE
 #endif
 
-#if __FreeBSD_version > 1300000
-typedef void timeout_t (void *);
-#endif
-
 #define	GROUPTASK_DRAIN(gtask)			\
 	gtaskqueue_drain((gtask)->gt_taskqueue, &(gtask)->gt_task)
 
@@ -1275,7 +1271,7 @@ wg_timers_event_data_sent(struct wg_timers *t)
 		callout_reset(&t->t_new_handshake, MSEC_2_TICKS(
 		    NEW_HANDSHAKE_TIMEOUT * 1000 +
 		    arc4random_uniform(REKEY_TIMEOUT_JITTER)),
-		    (timeout_t *)wg_timers_run_new_handshake, t);
+		    (callout_func_t *)wg_timers_run_new_handshake, t);
 	rw_runlock(&t->t_lock);
 }
 
@@ -1288,7 +1284,7 @@ wg_timers_event_data_received(struct wg_timers *t)
 		if (!callout_pending(&t->t_send_keepalive)) {
 			callout_reset(&t->t_send_keepalive,
 			    MSEC_2_TICKS(KEEPALIVE_TIMEOUT * 1000),
-			    (timeout_t *)wg_timers_run_send_keepalive, t);
+			    (callout_func_t *)wg_timers_run_send_keepalive, t);
 		} else {
 			t->t_need_another_keepalive = 1;
 		}
@@ -1327,7 +1323,7 @@ wg_timers_event_any_authenticated_packet_traversal(struct wg_timers *t)
 	if (!t->t_disabled && t->t_persistent_keepalive_interval > 0)
 		callout_reset(&t->t_persistent_keepalive,
 		     MSEC_2_TICKS(t->t_persistent_keepalive_interval * 1000),
-		    (timeout_t *)wg_timers_run_persistent_keepalive, t);
+		    (callout_func_t *)wg_timers_run_persistent_keepalive, t);
 	rw_runlock(&t->t_lock);
 }
 
@@ -1340,7 +1336,7 @@ wg_timers_event_handshake_initiated(struct wg_timers *t)
 		callout_reset(&t->t_retry_handshake, MSEC_2_TICKS(
 		    REKEY_TIMEOUT * 1000 +
 		    arc4random_uniform(REKEY_TIMEOUT_JITTER)),
-		    (timeout_t *)wg_timers_run_retry_handshake, t);
+		    (callout_func_t *)wg_timers_run_retry_handshake, t);
 	rw_runlock(&t->t_lock);
 }
 
@@ -1380,7 +1376,7 @@ wg_timers_event_session_derived(struct wg_timers *t)
 	if (!t->t_disabled) {
 		callout_reset(&t->t_zero_key_material,
 		    MSEC_2_TICKS(REJECT_AFTER_TIME * 3 * 1000),
-		    (timeout_t *)wg_timers_run_zero_key_material, t);
+		    (callout_func_t *)wg_timers_run_zero_key_material, t);
 	}
 	rw_runlock(&t->t_lock);
 }
@@ -1440,7 +1436,7 @@ wg_timers_run_retry_handshake(struct wg_timers *t)
 		if (!callout_pending(&t->t_zero_key_material))
 			callout_reset(&t->t_zero_key_material,
 			    MSEC_2_TICKS(REJECT_AFTER_TIME * 3 * 1000),
-			    (timeout_t *)wg_timers_run_zero_key_material, t);
+			    (callout_func_t *)wg_timers_run_zero_key_material, t);
 	}
 }
 
@@ -1454,7 +1450,7 @@ wg_timers_run_send_keepalive(struct wg_timers *t)
 		t->t_need_another_keepalive = 0;
 		callout_reset(&t->t_send_keepalive,
 		    MSEC_2_TICKS(KEEPALIVE_TIMEOUT * 1000),
-		    (timeout_t *)wg_timers_run_send_keepalive, t);
+		    (callout_func_t *)wg_timers_run_send_keepalive, t);
 	}
 }
 
