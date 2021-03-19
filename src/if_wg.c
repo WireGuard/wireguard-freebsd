@@ -2601,9 +2601,18 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	if (wgd->wgd_size == 0 || wgd->wgd_data == NULL)
 		return (EFAULT);
 
+	/* Can nvlists be streamed in? It's not nice to impose arbitrary limits like that but
+	 * there needs to be _some_ limitation. */
+	if (wgd->wgd_size >= UINT32_MAX / 2)
+		return (E2BIG);
+
 	sx_xlock(&sc->sc_lock);
 
 	nvlpacked = malloc(wgd->wgd_size, M_TEMP, M_WAITOK);
+	if (!nvlpacked) {
+		err = ENOMEM;
+		goto out;
+	}
 	err = copyin(wgd->wgd_data, nvlpacked, wgd->wgd_size);
 	if (err)
 		goto out;
@@ -2759,7 +2768,7 @@ wg_peer_to_export(struct wg_peer *peer, struct wg_peer_export *exp)
 	if (exp->aip_count == 0)
 		return (0);
 
-	exp->aip = malloc(exp->aip_count * sizeof(*exp->aip), M_TEMP, M_NOWAIT);
+	exp->aip = mallocarray(exp->aip_count, sizeof(*exp->aip), M_TEMP, M_NOWAIT);
 	if (exp->aip == NULL)
 		return (ENOMEM);
 
@@ -2895,8 +2904,16 @@ wg_marshal_peers(struct wg_softc *sc, nvlist_t **nvlp, nvlist_t ***nvl_arrayp, i
 		return (ENOMEM);
 
 	err = i = 0;
-	nvl_array = malloc(peer_count*sizeof(void*), M_TEMP, M_WAITOK | M_ZERO);
-	wpe = malloc(peer_count*sizeof(*wpe), M_TEMP, M_WAITOK | M_ZERO);
+	nvl_array = mallocarray(peer_count, sizeof(void *), M_TEMP, M_WAITOK | M_ZERO);
+	if (!nvl_array) {
+		err = ENOMEM;
+		goto out;
+	}
+	wpe = mallocarray(peer_count, sizeof(*wpe), M_TEMP, M_WAITOK | M_ZERO);
+	if (!wpe) {
+		err = ENOMEM;
+		goto out;
+	}
 
 	NET_EPOCH_ENTER(et);
 	CK_LIST_FOREACH(peer, &sc->sc_hashtable.h_peers_list, p_entry) {
@@ -2952,19 +2969,21 @@ wg_marshal_peers(struct wg_softc *sc, nvlist_t **nvlp, nvlist_t ***nvl_arrayp, i
 	*nvl_arrayp = nvl_array;
  out:
 	if (err != 0) {
-		/* Note that nvl_array is populated in reverse order. */
-		for (i = 0; i < peer_count; i++) {
-			nvlist_destroy(nvl_array[i]);
+		if (nvl_array) {
+			/* Note that nvl_array is populated in reverse order. */
+			for (i = 0; i < peer_count; i++) {
+				nvlist_destroy(nvl_array[i]);
+			}
+			free(nvl_array, M_TEMP);
 		}
-
-		free(nvl_array, M_TEMP);
-		if (nvl != NULL)
+		if (nvl)
 			nvlist_destroy(nvl);
 	}
-
-	for (i = 0; i < peer_count; i++)
-		free(wpe[i].aip, M_TEMP);
-	free(wpe, M_TEMP);
+	if (wpe) {
+		for (i = 0; i < peer_count; i++)
+			free(wpe[i].aip, M_TEMP);
+		free(wpe, M_TEMP);
+	}
 	return (err);
 }
 
@@ -3127,8 +3146,8 @@ wg_down(struct wg_softc *sc)
 
 	mtx_lock(&ht->h_mtx);
 	CK_LIST_FOREACH(peer, &ht->h_peers_list, p_entry) {
-                wg_queue_purge(&peer->p_stage_queue);
-                wg_timers_disable(&peer->p_timers);
+		wg_queue_purge(&peer->p_stage_queue);
+		wg_timers_disable(&peer->p_timers);
 	}
 	mtx_unlock(&ht->h_mtx);
 
@@ -3136,8 +3155,8 @@ wg_down(struct wg_softc *sc)
 
 	mtx_lock(&ht->h_mtx);
 	CK_LIST_FOREACH(peer, &ht->h_peers_list, p_entry) {
-                noise_remote_clear(&peer->p_remote);
-                wg_timers_event_reset_handshake_last_sent(&peer->p_timers);
+		noise_remote_clear(&peer->p_remote);
+		wg_timers_event_reset_handshake_last_sent(&peer->p_timers);
 	}
 	mtx_unlock(&ht->h_mtx);
 
@@ -3151,8 +3170,8 @@ static void
 crypto_taskq_setup(struct wg_softc *sc)
 {
 
-	sc->sc_encrypt = malloc(sizeof(struct grouptask)*mp_ncpus, M_WG, M_WAITOK);
-	sc->sc_decrypt = malloc(sizeof(struct grouptask)*mp_ncpus, M_WG, M_WAITOK);
+	sc->sc_encrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_WAITOK);
+	sc->sc_decrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_WAITOK);
 
 	for (int i = 0; i < mp_ncpus; i++) {
 		GROUPTASK_INIT(&sc->sc_encrypt[i], 0,
