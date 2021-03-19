@@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if_types.h>
 #include <net/ethernet.h>
 #include <net/radix.h>
+#include <net/netisr.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -2015,7 +2016,7 @@ wg_deliver_in(struct wg_peer *peer)
 	struct epoch_tracker et;
 	struct wg_tag *t;
 	uint32_t af;
-	int version;
+	u_int isr;
 
 	NET_EPOCH_ENTER(et);
 	sc = peer->p_sc;
@@ -2046,22 +2047,26 @@ wg_deliver_in(struct wg_peer *peer)
 
 		m->m_flags &= ~(M_MCAST | M_BCAST);
 		m->m_pkthdr.rcvif = ifp;
-		version = mtod(m, struct ip *)->ip_v;
-		if (version == IPVERSION) {
+		switch (mtod(m, struct ip *)->ip_v) {
+		case 4:
+			isr = NETISR_IP;
 			af = AF_INET;
-			BPF_MTAP2(ifp, &af, sizeof(af), m);
-			CURVNET_SET(ifp->if_vnet);
-			ip_input(m);
-			CURVNET_RESTORE();
-		} else if (version == 6) {
+			break;
+		case 6:
+			isr = NETISR_IPV6;
 			af = AF_INET6;
-			BPF_MTAP2(ifp, &af, sizeof(af), m);
-			CURVNET_SET(ifp->if_vnet);
-			ip6_input(m);
-			CURVNET_RESTORE();
-		} else
+			break;
+		default:
 			m_freem(m);
+			goto done;
+		}
 
+		BPF_MTAP2(ifp, &af, sizeof(af), m);
+		CURVNET_SET(ifp->if_vnet);
+		M_SETFIB(m, ifp->if_fib);
+		netisr_dispatch(isr, m);
+		CURVNET_RESTORE();
+done:
 		wg_timers_event_data_received(&peer->p_timers);
 	}
 	NET_EPOCH_EXIT(et);
