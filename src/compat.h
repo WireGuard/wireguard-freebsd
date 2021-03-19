@@ -85,4 +85,6 @@ static inline uint32_t arc4random_uniform(uint32_t bound)
 
 	return ret % bound;
 }
+
+typedef void callout_func_t(void *);
 #endif
