@@ -277,6 +277,7 @@ struct wg_socket {
 	struct socket	*so_so4;
 	struct socket	*so_so6;
 	uint32_t	 so_user_cookie;
+	int		 so_fibnum;
 	in_port_t	 so_port;
 };
 
@@ -377,6 +378,7 @@ static int wg_socket_bind(struct socket *, struct socket *, in_port_t *);
 static void wg_socket_set(struct wg_softc *, struct socket *, struct socket *);
 static void wg_socket_uninit(struct wg_softc *);
 static void wg_socket_set_cookie(struct wg_softc *, uint32_t);
+static int wg_socket_set_fibnum(struct wg_softc *, int);
 static int wg_send(struct wg_softc *, struct wg_endpoint *, struct mbuf *);
 static void wg_timers_event_data_sent(struct wg_timers *);
 static void wg_timers_event_data_received(struct wg_timers *);
@@ -971,6 +973,7 @@ wg_socket_init(struct wg_softc *sc, in_port_t port)
 	MPASS(rc == 0);
 
 	so4->so_user_cookie = so6->so_user_cookie = sc->sc_socket.so_user_cookie;
+	so4->so_fibnum = so6->so_fibnum = sc->sc_socket.so_fibnum;
 
 	rc = wg_socket_bind(so4, so6, &port);
 	if (rc == 0) {
@@ -998,6 +1001,23 @@ static void wg_socket_set_cookie(struct wg_softc *sc, uint32_t user_cookie)
 		so->so_so4->so_user_cookie = user_cookie;
 	if (so->so_so6)
 		so->so_so6->so_user_cookie = user_cookie;
+}
+
+static int wg_socket_set_fibnum(struct wg_softc *sc, int fibnum)
+{
+	struct wg_socket *so = &sc->sc_socket;
+
+	if (fibnum < 0 || fibnum >= rt_numfibs)
+		return EINVAL;
+
+	sx_assert(&sc->sc_lock, SX_XLOCKED);
+
+	so->so_fibnum = fibnum;
+	if (so->so_so4)
+		so->so_so4->so_fibnum = fibnum;
+	if (so->so_so6)
+		so->so_so6->so_fibnum = fibnum;
+	return 0;
 }
 
 static void
@@ -3079,6 +3099,22 @@ wg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	case SIOCADDMULTI:
 	case SIOCDELMULTI:
 		break;
+	case SIOCGTUNFIB:
+		sx_slock(&sc->sc_lock);
+		ifr->ifr_fib = sc->sc_socket.so_fibnum;
+		sx_sunlock(&sc->sc_lock);
+		break;
+	case SIOCSTUNFIB:
+		ret = priv_check(curthread, PRIV_NET_WG);
+		if (ret)
+			break;
+		ret = priv_check(curthread, PRIV_NET_SETIFFIB);
+		if (ret)
+			break;
+		sx_xlock(&sc->sc_lock);
+		ret = wg_socket_set_fibnum(sc, ifr->ifr_fib);
+		sx_xunlock(&sc->sc_lock);
+		break;
 	default:
 		ret = ENOTTY;
 	}
@@ -3196,6 +3232,7 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 
 	sc = malloc(sizeof(*sc), M_WG, M_WAITOK | M_ZERO);
 	sc->sc_ucred = crhold(curthread->td_ucred);
+	sc->sc_socket.so_fibnum = curthread->td_proc->p_fibnum;
 	ifp = sc->sc_ifp = if_alloc(IFT_WIREGUARD);
 	ifp->if_softc = sc;
 	if_initname(ifp, wgname, unit);
