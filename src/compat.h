@@ -7,6 +7,36 @@
  */
 
 #include <sys/param.h>
+
+#if __FreeBSD_version < 1400000
+#include <sys/smp.h>
+#include <sys/gtaskqueue.h>
+
+struct taskqgroup_cpu {
+	LIST_HEAD(, grouptask)  tgc_tasks;
+	struct gtaskqueue       *tgc_taskq;
+	int     tgc_cnt;
+	int     tgc_cpu;
+};
+
+struct taskqgroup {
+	struct taskqgroup_cpu tqg_queue[MAXCPU];
+	/* Other members trimmed from compat. */
+};
+
+static inline void taskqgroup_drain_all(struct taskqgroup *tqg)
+{
+	struct gtaskqueue *q;
+
+	for (int i = 0; i < mp_ncpus; i++) {
+		q = tqg->tqg_queue[i].tgc_taskq;
+		if (q == NULL)
+			continue;
+		gtaskqueue_drain_all(q);
+	}
+}
+#endif
+
 #if __FreeBSD_version < 1300000
 #define VIMAGE
 
@@ -18,8 +48,6 @@
 #include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/lock.h>
-#include <sys/smp.h>
-#include <sys/gtaskqueue.h>
 #include <sys/socketvar.h>
 #include <sys/protosw.h>
 #include <net/vnet.h>
@@ -39,34 +67,6 @@
 
 #undef atomic_load_ptr
 #define atomic_load_ptr(p) (*(volatile __typeof(*p) *)(p))
-
-struct taskqgroup_cpu {
-	LIST_HEAD(, grouptask)	tgc_tasks;
-	struct gtaskqueue	*tgc_taskq;
-	int	tgc_cnt;
-	int	tgc_cpu;
-};
-
-struct taskqgroup {
-	struct taskqgroup_cpu tqg_queue[MAXCPU];
-	struct mtx	tqg_lock;
-	const char *	tqg_name;
-	int		tqg_adjusting;
-	int		tqg_stride;
-	int		tqg_cnt;
-};
-
-static inline void taskqgroup_drain_all(struct taskqgroup *tqg)
-{
-	struct gtaskqueue *q;
-
-	for (int i = 0; i < mp_ncpus; i++) {
-		q = tqg->tqg_queue[i].tgc_taskq;
-		if (q == NULL)
-			continue;
-		gtaskqueue_drain_all(q);
-	}
-}
 #endif
 
 #if __FreeBSD_version < 1202000
