@@ -66,6 +66,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in_pcb.h>
 #include <netinet6/in6_pcb.h>
 #include <netinet/udp_var.h>
+#include <netinet6/nd6.h>
 
 #include <machine/in_cksum.h>
 
@@ -3300,6 +3301,10 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 
 	if_attach(ifp);
 	bpfattach(ifp, DLT_NULL, sizeof(uint32_t));
+#ifdef INET6
+	ND_IFINFO(ifp)->flags &= ~ND6_IFF_AUTO_LINKLOCAL;
+	ND_IFINFO(ifp)->flags |= ND6_IFF_NO_DAD;
+#endif
 
 	sx_xlock(&wg_sx);
 	LIST_INSERT_HEAD(&wg_list, sc, sc_entry);
