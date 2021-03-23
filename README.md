@@ -10,6 +10,7 @@ Then, on FreeBSD 12 &amp; 13:
 
 ```
 # git clone https://git.zx2c4.com/wireguard-freebsd
+# make -C wireguard-freebsd/src
 # make -C wireguard-freebsd/src load install
 ```
 
