@@ -2356,14 +2356,37 @@ wg_input(struct mbuf *m0, int offset, struct inpcb *inpcb,
 
 	/*
 	 * Ensure mbuf has at least enough contiguous data to peel off our
-	 * headers at the beginning.
+	 * headers at the beginning, and make a jumbo contigious copy if we've
+	 * got a jumbo frame. This is pretty sloppy, and we should just fix the
+	 * crypto routines to deal with mbuf clusters instead.
 	 */
-	if ((m = m_defrag(m0, M_NOWAIT)) == NULL) {
+	if (!m0->m_next)
+		m = m0;
+	else {
+		int allocation_order;
+
+		if (m0->m_pkthdr.len <= MCLBYTES)
+			allocation_order = MCLBYTES;
+		else if (m0->m_pkthdr.len <= MJUMPAGESIZE)
+			allocation_order = MJUMPAGESIZE;
+		else if (m0->m_pkthdr.len <= MJUM9BYTES)
+			allocation_order = MJUM9BYTES;
+		else if (m0->m_pkthdr.len <= MJUM16BYTES)
+			allocation_order = MJUM16BYTES;
+		else {
+			m_freem(m0);
+			return;
+		}
+		if ((m = m_getjcl(M_NOWAIT, MT_DATA, M_PKTHDR, allocation_order)) == NULL) {
+			m_freem(m0);
+			return;
+		}
+		m->m_len = m->m_pkthdr.len = m0->m_pkthdr.len;
+		m_copydata(m0, 0, m0->m_pkthdr.len, mtod(m, void *));
 		m_freem(m0);
-		return;
 	}
 	data = mtod(m, void *);
-	pkttype = *(uint32_t*)data;
+	pkttype = *(uint32_t *)data;
 	t = wg_tag_get(m);
 	if (t == NULL) {
 		goto free;
@@ -2390,7 +2413,6 @@ wg_input(struct mbuf *m0, int offset, struct inpcb *inpcb,
 		}
 	} else if (pktlen >= sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN
 	    && pkttype == WG_PKT_DATA) {
-
 		pkt_data = data;
 		remote = wg_index_get(sc, pkt_data->r_idx);
 		if (remote == NULL) {
