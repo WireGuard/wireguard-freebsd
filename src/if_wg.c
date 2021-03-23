@@ -3290,7 +3290,7 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	wg_aip_init(&sc->sc_aips);
 
 	if_setmtu(ifp, ETHERMTU - 80);
-	ifp->if_flags = IFF_POINTOPOINT | IFF_NOARP;
+	ifp->if_flags = IFF_NOARP;
 	ifp->if_init = wg_init;
 	ifp->if_reassign = wg_reassign;
 	ifp->if_qflush = wg_qflush;
