@@ -3122,9 +3122,7 @@ wg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	case SIOCDELMULTI:
 		break;
 	case SIOCGTUNFIB:
-		sx_slock(&sc->sc_lock);
 		ifr->ifr_fib = sc->sc_socket.so_fibnum;
-		sx_sunlock(&sc->sc_lock);
 		break;
 	case SIOCSTUNFIB:
 		ret = priv_check(curthread, PRIV_NET_WG);
