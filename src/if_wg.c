@@ -1244,9 +1244,10 @@ static void
 wg_timers_set_persistent_keepalive(struct wg_timers *t, uint16_t interval)
 {
 	rw_rlock(&t->t_lock);
-	if (!t->t_disabled) {
+	if (interval != t->t_persistent_keepalive_interval) {
 		t->t_persistent_keepalive_interval = interval;
-		wg_timers_run_persistent_keepalive(t);
+		if (!t->t_disabled)
+			wg_timers_run_persistent_keepalive(t);
 	}
 	rw_runlock(&t->t_lock);
 }
@@ -1504,7 +1505,7 @@ wg_timers_run_persistent_keepalive(struct wg_timers *t)
 {
 	struct wg_peer	 *peer = __containerof(t, struct wg_peer, p_timers);
 
-	if (t->t_persistent_keepalive_interval != 0)
+	if (t->t_persistent_keepalive_interval > 0)
 		GROUPTASK_ENQUEUE(&peer->p_send_keepalive);
 }
 
