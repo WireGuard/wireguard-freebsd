@@ -1991,8 +1991,6 @@ wg_deliver_out(struct wg_peer *peer)
 	int ret;
 
 	NET_EPOCH_ENTER(et);
-	if (peer->p_sc->sc_ifp->if_link_state == LINK_STATE_DOWN)
-		goto done;
 
 	wg_peer_get_endpoint(peer, &endpoint);
 
@@ -2021,7 +2019,7 @@ wg_deliver_out(struct wg_peer *peer)
 		}
 		m_freem(m);
 	}
-done:
+
 	NET_EPOCH_EXIT(et);
 }
 
