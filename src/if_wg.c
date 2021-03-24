@@ -3328,6 +3328,9 @@ wg_clone_destroy(struct ifnet *ifp)
 	sx_xunlock(&wg_sx);
 
 	if_link_state_change(sc->sc_ifp, LINK_STATE_DOWN);
+	CURVNET_SET(sc->sc_ifp->if_vnet);
+	if_purgeaddrs(sc->sc_ifp);
+	CURVNET_RESTORE();
 
 	sx_xlock(&sc->sc_lock);
 	wg_socket_uninit(sc);
@@ -3426,8 +3429,6 @@ wg_prison_remove(void *obj, void *data __unused)
 {
 	const struct prison *pr = obj;
 	struct wg_softc *sc;
-	struct ucred *cred;
-	bool dying;
 
 	/*
 	 * Do a pass through all if_wg interfaces and release creds on any from
@@ -3436,39 +3437,17 @@ wg_prison_remove(void *obj, void *data __unused)
 	 */
 	sx_slock(&wg_sx);
 	LIST_FOREACH(sc, &wg_list, sc_entry) {
-		cred = NULL;
-
 		sx_xlock(&sc->sc_lock);
-		dying = (sc->sc_flags & WGF_DYING) != 0;
-		if (!dying && sc->sc_ucred != NULL &&
-		    sc->sc_ucred->cr_prison == pr) {
-			/* Home jail is going away. */
-			cred = sc->sc_ucred;
+		if (!(sc->sc_flags & WGF_DYING) && sc->sc_ucred && sc->sc_ucred->cr_prison == pr) {
+			struct ucred *cred = sc->sc_ucred;
+			DPRINTF(sc, "Creating jail exiting\n");
+			if_link_state_change(sc->sc_ifp, LINK_STATE_DOWN);
+			wg_socket_uninit(sc);
 			sc->sc_ucred = NULL;
-
+			crfree(cred);
 			sc->sc_flags |= WGF_DYING;
 		}
-
-		/*
-		 * If this is our foreign vnet going away, we'll also down the
-		 * link and kill the socket because traffic needs to stop.  Any
-		 * address will be revoked in the rehoming process.
-		 */
-		if (cred != NULL || (!dying &&
-		    sc->sc_ifp->if_vnet == pr->pr_vnet)) {
-			if_link_state_change(sc->sc_ifp, LINK_STATE_DOWN);
-			/* Have to kill the sockets, as they also hold refs. */
-			wg_socket_uninit(sc);
-		}
-
 		sx_xunlock(&sc->sc_lock);
-
-		if (cred != NULL) {
-			CURVNET_SET(sc->sc_ifp->if_vnet);
-			if_purgeaddrs(sc->sc_ifp);
-			CURVNET_RESTORE();
-			crfree(cred);
-		}
 	}
 	sx_sunlock(&wg_sx);
 
