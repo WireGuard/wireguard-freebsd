@@ -378,7 +378,8 @@ static int wg_socket_init(struct wg_softc *, in_port_t);
 static int wg_socket_bind(struct socket *, struct socket *, in_port_t *);
 static void wg_socket_set(struct wg_softc *, struct socket *, struct socket *);
 static void wg_socket_uninit(struct wg_softc *);
-static void wg_socket_set_cookie(struct wg_softc *, uint32_t);
+static int wg_socket_set_sockopt(struct socket *, struct socket *, int, void *, size_t);
+static int wg_socket_set_cookie(struct wg_softc *, uint32_t);
 static int wg_socket_set_fibnum(struct wg_softc *, int);
 static int wg_send(struct wg_softc *, struct wg_endpoint *, struct mbuf *);
 static void wg_timers_event_data_sent(struct wg_timers *);
@@ -973,8 +974,16 @@ wg_socket_init(struct wg_softc *sc, in_port_t port)
 	rc = udp_set_kernel_tunneling(so6, wg_input, NULL, sc);
 	MPASS(rc == 0);
 
-	so4->so_user_cookie = so6->so_user_cookie = sc->sc_socket.so_user_cookie;
-	so4->so_fibnum = so6->so_fibnum = sc->sc_socket.so_fibnum;
+	if (sc->sc_socket.so_user_cookie) {
+		rc = wg_socket_set_sockopt(so4, so6, SO_USER_COOKIE, &sc->sc_socket.so_user_cookie, sizeof(sc->sc_socket.so_user_cookie));
+		if (rc)
+			goto out;
+	}
+	if (sc->sc_socket.so_fibnum) {
+		rc = wg_socket_set_sockopt(so4, so6, SO_SETFIB, &sc->sc_socket.so_fibnum, sizeof(sc->sc_socket.so_fibnum));
+		if (rc)
+			goto out;
+	}
 
 	rc = wg_socket_bind(so4, so6, &port);
 	if (rc == 0) {
@@ -991,34 +1000,47 @@ out:
 	return (rc);
 }
 
-static void wg_socket_set_cookie(struct wg_softc *sc, uint32_t user_cookie)
+static int wg_socket_set_sockopt(struct socket *so4, struct socket *so6, int name, void *val, size_t len)
+{
+	int ret4 = 0, ret6 = 0;
+	struct sockopt sopt = {
+		.sopt_dir = SOPT_SET,
+		.sopt_level = SOL_SOCKET,
+		.sopt_name = name,
+		.sopt_val = val,
+		.sopt_valsize = len
+	};
+
+	if (so4)
+		ret4 = sosetopt(so4, &sopt);
+	if (so6)
+		ret6 = sosetopt(so6, &sopt);
+	return ret4 ?: ret6;
+}
+
+static int wg_socket_set_cookie(struct wg_softc *sc, uint32_t user_cookie)
 {
 	struct wg_socket *so = &sc->sc_socket;
+	int ret;
 
 	sx_assert(&sc->sc_lock, SX_XLOCKED);
-
-	so->so_user_cookie = user_cookie;
-	if (so->so_so4)
-		so->so_so4->so_user_cookie = user_cookie;
-	if (so->so_so6)
-		so->so_so6->so_user_cookie = user_cookie;
+	ret = wg_socket_set_sockopt(so->so_so4, so->so_so6, SO_USER_COOKIE, &user_cookie, sizeof(user_cookie));
+	if (!ret)
+		so->so_user_cookie = user_cookie;
+	return ret;
 }
 
 static int wg_socket_set_fibnum(struct wg_softc *sc, int fibnum)
 {
 	struct wg_socket *so = &sc->sc_socket;
-
-	if (fibnum < 0 || fibnum >= rt_numfibs)
-		return EINVAL;
+	int ret;
 
 	sx_assert(&sc->sc_lock, SX_XLOCKED);
 
-	so->so_fibnum = fibnum;
-	if (so->so_so4)
-		so->so_so4->so_fibnum = fibnum;
-	if (so->so_so6)
-		so->so_so6->so_fibnum = fibnum;
-	return 0;
+	ret = wg_socket_set_sockopt(so->so_so4, so->so_so6, SO_SETFIB, &fibnum, sizeof(fibnum));
+	if (!ret)
+		so->so_fibnum = fibnum;
+	return ret;
 }
 
 static void
@@ -2731,7 +2753,9 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 			err = EINVAL;
 			goto out;
 		}
-		wg_socket_set_cookie(sc, user_cookie);
+		err = wg_socket_set_cookie(sc, user_cookie);
+		if (err)
+			goto out;
 	}
 	if (nvlist_exists_nvlist_array(nvl, "peers")) {
 		size_t peercount;
