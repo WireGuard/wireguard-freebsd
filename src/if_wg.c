@@ -2441,22 +2441,18 @@ free:
 static int
 wg_transmit(struct ifnet *ifp, struct mbuf *m)
 {
-	struct wg_softc *sc;
+	struct wg_softc *sc = ifp->if_softc;
 	sa_family_t family;
 	struct epoch_tracker et;
 	struct wg_peer *peer;
 	struct wg_tag *t;
 	uint32_t af;
-	int rc;
+	int rc = 0;
 
-	/*
-	 * Work around lifetime issue in the ipv6 mld code.
-	 */
-	if (__predict_false(ifp->if_flags & IFF_DYING))
+	/* Work around lifetime issue in the ipv6 mld code. */
+	if (__predict_false((ifp->if_flags & IFF_DYING) || !sc))
 		return (ENXIO);
 
-	rc = 0;
-	sc = ifp->if_softc;
 	if ((t = wg_tag_get(m)) == NULL) {
 		rc = ENOBUFS;
 		goto early_out;
@@ -2888,8 +2884,15 @@ wg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 {
 	struct wg_data_io *wgd = (struct wg_data_io *)data;
 	struct ifreq *ifr = (struct ifreq *)data;
-	struct wg_softc	*sc = ifp->if_softc;
+	struct wg_softc *sc;
 	int ret = 0;
+
+	sx_slock(&wg_sx);
+	sc = ifp->if_softc;
+	if (!sc) {
+		ret = ENXIO;
+		goto out;
+	}
 
 	switch (cmd) {
 	case SIOCSWG:
@@ -2908,7 +2911,7 @@ wg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		 */
 		break;
 	case SIOCSIFFLAGS:
-		if ((ifp->if_flags & IFF_UP) != 0)
+		if (ifp->if_flags & IFF_UP)
 			ret = wg_up(sc);
 		else
 			wg_down(sc);
@@ -2940,6 +2943,8 @@ wg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		ret = ENOTTY;
 	}
 
+out:
+	sx_sunlock(&wg_sx);
 	return ret;
 }
 
@@ -3118,6 +3123,7 @@ wg_clone_destroy(struct ifnet *ifp)
 	struct ucred *cred;
 
 	sx_xlock(&wg_sx);
+	ifp->if_softc = NULL;
 	sx_xlock(&sc->sc_lock);
 	sc->sc_flags |= WGF_DYING;
 	cred = sc->sc_ucred;
