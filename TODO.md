@@ -2,11 +2,6 @@
 
 - Finish porting [this script](https://git.zx2c4.com/wireguard-linux/tree/tools/testing/selftests/wireguard/netns.sh)
   to `./tests/netns.sh` using vnets and epairs.
-- Marshall peers directly to nvlists without going through intermediate
-  structures (`wg_peer_export`) and the like. This means grappling with the use
-  of epoch there, and either making nvl allocations not sleep, or doing nvl
-  allocations outside of epoch critical sections, or possibly deciding epoch
-  doesn't actually matter there because we're holding an sx.
 - Rework locking and epoch lifetimes; come up with consistent set of rules.
 - Chop off padding on rx after verifying lengths, so that tcpdump doesn't see
   zeros.
