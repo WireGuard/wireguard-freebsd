@@ -100,7 +100,7 @@ __FBSDID("$FreeBSD$");
 #define NEW_HANDSHAKE_TIMEOUT	(REKEY_TIMEOUT + KEEPALIVE_TIMEOUT)
 #define UNDERLOAD_TIMEOUT	1
 
-#define DPRINTF(sc,  ...) if (wireguard_debug) if_printf(sc->sc_ifp, ##__VA_ARGS__)
+#define DPRINTF(sc, ...) if (sc->sc_ifp->if_flags & IFF_DEBUG) if_printf(sc->sc_ifp, ##__VA_ARGS__)
 
 /* First byte indicating packet type on the wire */
 #define WG_PKT_INITIATION htole32(1)
@@ -329,7 +329,6 @@ struct wg_softc {
 
 static int clone_count;
 static uma_zone_t ratelimit_zone;
-static int wireguard_debug;
 static volatile unsigned long peer_counter = 0;
 static const char wgname[] = "wg";
 static unsigned wg_osd_jail_slot;
@@ -337,18 +336,13 @@ static unsigned wg_osd_jail_slot;
 static struct sx wg_sx;
 SX_SYSINIT(wg_sx, &wg_sx, "wg_sx");
 
-static LIST_HEAD(, wg_softc)	wg_list = LIST_HEAD_INITIALIZER(wg_list);
-
-SYSCTL_NODE(_net, OID_AUTO, wg, CTLFLAG_RW, 0, "WireGuard");
-SYSCTL_INT(_net_wg, OID_AUTO, debug, CTLFLAG_RWTUN, &wireguard_debug, 0,
-	"enable debug logging");
+static LIST_HEAD(, wg_softc) wg_list = LIST_HEAD_INITIALIZER(wg_list);
 
 static TASKQGROUP_DEFINE(wg_tqg, mp_ncpus, 1);
 
 MALLOC_DEFINE(M_WG, "WG", "wireguard");
 
 VNET_DEFINE_STATIC(struct if_clone *, wg_cloner);
-
 
 #define	V_wg_cloner	VNET(wg_cloner)
 #define	WG_CAPS		IFCAP_LINKSTATE
