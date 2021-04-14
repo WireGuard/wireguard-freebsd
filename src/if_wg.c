@@ -2654,10 +2654,6 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	sx_xlock(&sc->sc_lock);
 
 	nvlpacked = malloc(wgd->wgd_size, M_TEMP, M_WAITOK);
-	if (!nvlpacked) {
-		err = ENOMEM;
-		goto out;
-	}
 	err = copyin(wgd->wgd_data, nvlpacked, wgd->wgd_size);
 	if (err)
 		goto out;
