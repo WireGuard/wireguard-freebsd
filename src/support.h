@@ -82,4 +82,25 @@ sogetsockaddr(struct socket *so, struct sockaddr **nam)
 	return (error);
 }
 
+/* These are defined in sys/compat/linuxkpi/common/include/linux/compiler.h,
+ * however I don't really want to include all that. */
+#define barrier()                       __asm__ __volatile__("": : :"memory")
+
+#define ACCESS_ONCE(x)                  (*(volatile __typeof(x) *)&(x))
+
+#define WRITE_ONCE(x,v) do {            \
+        barrier();                      \
+        ACCESS_ONCE(x) = (v);           \
+        barrier();                      \
+} while (0)
+
+#define READ_ONCE(x) ({                 \
+        __typeof(x) __var = ({          \
+                barrier();              \
+                ACCESS_ONCE(x);         \
+        });                             \
+        barrier();                      \
+        __var;                          \
+})
+
 #endif

@@ -12,8 +12,6 @@
 - Resize mbufs once at the beginning, and then encrypt/decrypt in place, rather
   than making a new mbuf and copying. (Remember to clear the tags and other
   pieces of metadata before passing it off to udp sending or netisr receiving.)
-- Check nonces in serial, rather than in parallel. (This requires taking a
-  keypair reference; ncon is working on it.)
 - Audit allowedips / radix tree checks, and make sure it's actually behaving as
   expected. (It might be useful to port [this selftest](https://git.zx2c4.com/wireguard-linux/tree/drivers/net/wireguard/selftest/allowedips.c).)
 - Make code style consistent with one FreeBSD way, rather than a mix of styles.
