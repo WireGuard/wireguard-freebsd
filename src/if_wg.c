@@ -959,11 +959,9 @@ wg_socket_init(struct wg_softc *sc, in_port_t port)
 		if (rc)
 			goto out;
 	}
-	if (sc->sc_socket.so_fibnum) {
-		rc = wg_socket_set_sockopt(so4, so6, SO_SETFIB, &sc->sc_socket.so_fibnum, sizeof(sc->sc_socket.so_fibnum));
-		if (rc)
-			goto out;
-	}
+	rc = wg_socket_set_sockopt(so4, so6, SO_SETFIB, &sc->sc_socket.so_fibnum, sizeof(sc->sc_socket.so_fibnum));
+	if (rc)
+		goto out;
 
 	rc = wg_socket_bind(so4, so6, &port);
 	if (rc == 0) {
