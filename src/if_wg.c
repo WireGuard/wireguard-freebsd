@@ -494,7 +494,7 @@ wg_peer_destroy(struct wg_peer *peer)
 	/* Final cleanup */
 	peer->p_sc->sc_peers_num--;
 	TAILQ_REMOVE(&peer->p_sc->sc_peers, peer, p_entry);
-	DPRINTF(peer->p_sc, "Peer %llu destroyed\n", (unsigned long long)peer->p_id);
+	DPRINTF(peer->p_sc, "Peer %lu destroyed\n", peer->p_id);
 	noise_remote_free(peer->p_remote, wg_peer_free_deferred);
 }
 
@@ -1241,18 +1241,17 @@ wg_timers_run_retry_handshake(struct wg_timers *t)
 		t->t_handshake_retries++;
 		rw_wunlock(&t->t_lock);
 
-		DPRINTF(peer->p_sc, "Handshake for peer %llu did not complete "
+		DPRINTF(peer->p_sc, "Handshake for peer %lu did not complete "
 		    "after %d seconds, retrying (try %d)\n",
-			(unsigned long long)peer->p_id,
-		    REKEY_TIMEOUT, t->t_handshake_retries + 1);
+		    peer->p_id, REKEY_TIMEOUT, t->t_handshake_retries + 1);
 		wg_peer_clear_src(peer);
 		wg_timers_run_send_initiation(t, 1);
 	} else {
 		rw_wunlock(&t->t_lock);
 
-		DPRINTF(peer->p_sc, "Handshake for peer %llu did not complete "
+		DPRINTF(peer->p_sc, "Handshake for peer %lu did not complete "
 		    "after %d retries, giving up\n",
-			(unsigned long long) peer->p_id, MAX_TIMER_HANDSHAKES + 2);
+		    peer->p_id, MAX_TIMER_HANDSHAKES + 2);
 
 		callout_stop(&t->t_send_keepalive);
 		wg_queue_purge(&peer->p_stage_queue);
@@ -1282,9 +1281,9 @@ wg_timers_run_new_handshake(struct wg_timers *t)
 {
 	struct wg_peer	*peer = __containerof(t, struct wg_peer, p_timers);
 
-	DPRINTF(peer->p_sc, "Retrying handshake with peer %llu because we "
+	DPRINTF(peer->p_sc, "Retrying handshake with peer %lu because we "
 	    "stopped hearing back after %d seconds\n",
-		(unsigned long long)peer->p_id, NEW_HANDSHAKE_TIMEOUT);
+	    peer->p_id, NEW_HANDSHAKE_TIMEOUT);
 	wg_peer_clear_src(peer);
 
 	wg_timers_run_send_initiation(t, 0);
@@ -1295,9 +1294,9 @@ wg_timers_run_zero_key_material(struct wg_timers *t)
 {
 	struct wg_peer *peer = __containerof(t, struct wg_peer, p_timers);
 
-	DPRINTF(peer->p_sc, "Zeroing out all keys for peer %llu, since we "
+	DPRINTF(peer->p_sc, "Zeroing out all keys for peer %lu, since we "
 	    "haven't received a new one in %d seconds\n",
-		(unsigned long long)peer->p_id, REJECT_AFTER_TIME * 3);
+	    peer->p_id, REJECT_AFTER_TIME * 3);
 	noise_remote_keypairs_clear(peer->p_remote);
 }
 
@@ -1334,8 +1333,7 @@ wg_send_initiation(struct wg_peer *peer)
 	    pkt.es, pkt.ets) != 0)
 		goto out;
 
-	DPRINTF(peer->p_sc, "Sending handshake initiation to peer %llu\n",
-		(unsigned long long)peer->p_id);
+	DPRINTF(peer->p_sc, "Sending handshake initiation to peer %lu\n", peer->p_id);
 
 	pkt.t = WG_PKT_INITIATION;
 	cookie_maker_mac(&peer->p_cookie, &pkt.m, &pkt,
@@ -1357,8 +1355,7 @@ wg_send_response(struct wg_peer *peer)
 	    pkt.ue, pkt.en) != 0)
 		goto out;
 
-	DPRINTF(peer->p_sc, "Sending handshake response to peer %llu\n",
-	    (unsigned long long)peer->p_id);
+	DPRINTF(peer->p_sc, "Sending handshake response to peer %lu\n", peer->p_id);
 
 	wg_timers_event_session_derived(&peer->p_timers);
 	pkt.t = WG_PKT_RESPONSE;
@@ -2183,7 +2180,7 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 	peer_af = peer->p_endpoint.e_remote.r_sa.sa_family;
 	if (__predict_false(peer_af != AF_INET && peer_af != AF_INET6)) {
 		DPRINTF(sc, "No valid endpoint has been configured or "
-			    "discovered for peer %llu\n", (unsigned long long)peer->p_id);
+			    "discovered for peer %lu\n", peer->p_id);
 		rc = EHOSTUNREACH;
 		goto err;
 	}
