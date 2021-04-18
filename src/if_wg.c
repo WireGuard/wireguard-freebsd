@@ -76,7 +76,7 @@ __FBSDID("$FreeBSD$");
 #include "version.h"
 #include "if_wg.h"
 
-#define DEFAULT_MTU		1420
+#define DEFAULT_MTU		(ETHERMTU - 80)
 #define MAX_MTU			(IF_MAXMTU - 80)
 
 #define MAX_STAGED_PKT		128
@@ -2642,7 +2642,7 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	RADIX_NODE_HEAD_LOCK_INIT(sc->sc_aip4);
 	RADIX_NODE_HEAD_LOCK_INIT(sc->sc_aip6);
 
-	if_setmtu(ifp, ETHERMTU - 80);
+	if_setmtu(ifp, DEFAULT_MTU);
 	ifp->if_flags = IFF_NOARP | IFF_MULTICAST;
 	ifp->if_init = wg_init;
 	ifp->if_reassign = wg_reassign;
