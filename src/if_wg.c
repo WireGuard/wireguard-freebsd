@@ -2172,6 +2172,14 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 		goto err;
 	}
 
+	/* Detect packet loops, TODO make better unique identifier than p_id
+	 * (because it is truncated from uint64_t to uint32_t). */
+	if (__predict_false(if_tunnel_check_nesting(ifp, m, peer->p_id, 1))) {
+		DPRINTF(sc, "Packet looped");
+		rc = ELOOP;
+		goto err;
+	}
+
 	peer_af = peer->p_endpoint.e_remote.r_sa.sa_family;
 	if (__predict_false(peer_af != AF_INET && peer_af != AF_INET6)) {
 		DPRINTF(sc, "No valid endpoint has been configured or "
