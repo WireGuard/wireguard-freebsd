@@ -86,17 +86,15 @@ int	noise_keypair_nonce_check(struct noise_keypair *, uint64_t);
 
 int	noise_keep_key_fresh_send(struct noise_remote *);
 int	noise_keep_key_fresh_recv(struct noise_remote *);
-void	noise_keypair_encrypt(
+int	noise_keypair_encrypt(
 	    struct noise_keypair *,
 	    uint32_t *r_idx,
 	    uint64_t nonce,
-	    uint8_t *buf,
-	    size_t buflen);
+	    struct mbuf *);
 int	noise_keypair_decrypt(
 	    struct noise_keypair *,
 	    uint64_t nonce,
-	    uint8_t *buf,
-	    size_t buflen);
+	    struct mbuf *);
 
 /* Handshake functions */
 int	noise_create_initiation(

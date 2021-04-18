@@ -859,23 +859,24 @@ noise_keep_key_fresh_recv(struct noise_remote *r)
 	return (keep_key_fresh ? ESTALE : 0);
 }
 
-void
-noise_keypair_encrypt(struct noise_keypair *kp, uint32_t *r_idx, uint64_t nonce,
-    uint8_t *buf, size_t buflen)
+int
+noise_keypair_encrypt(struct noise_keypair *kp, uint32_t *r_idx, uint64_t nonce, struct mbuf *m)
 {
-	chacha20poly1305_encrypt(buf, buf, buflen, NULL, 0, nonce, kp->kp_send);
+	if (chacha20poly1305_encrypt_mbuf(m, nonce, kp->kp_send) == 0)
+	       return (ENOMEM);
+
 	*r_idx = kp->kp_index.i_remote_index;
+	return (0);
 }
 
 int
-noise_keypair_decrypt(struct noise_keypair *kp, uint64_t nonce, uint8_t *buf,
-    size_t buflen)
+noise_keypair_decrypt(struct noise_keypair *kp, uint64_t nonce, struct mbuf *m)
 {
 	if (READ_ONCE(kp->kp_nonce_recv) >= REJECT_AFTER_MESSAGES ||
 	    noise_timer_expired(&kp->kp_birthdate, REJECT_AFTER_TIME, 0))
 		return (EINVAL);
 
-	if (chacha20poly1305_decrypt(buf, buf, buflen, NULL, 0, nonce, kp->kp_recv) == 0)
+	if (chacha20poly1305_decrypt_mbuf(m, nonce, kp->kp_recv) == 0)
 		return (EINVAL);
 
 	if (noise_received_with(kp) != 0)

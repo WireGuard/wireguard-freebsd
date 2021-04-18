@@ -1423,7 +1423,7 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	struct mbuf		*m;
 	uint32_t		 idx;
 	uint8_t			 zeroed[NOISE_AUTHTAG_LEN] = { 0 };
-	int			 pad, len;
+	int			 pad;
 
 	peer = noise_keypair_remote_arg(pkt->p_keypair);
 	m = pkt->p_mbuf;
@@ -1439,17 +1439,9 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	if (pad != 0 && !m_append(m, pad, zeroed))
 		goto error;
 
-	/* TODO teach noise_keypair_encrypt about mbufs. Currently we have to
-	 * resort to m_defrag to create an encryptable buffer. */
-	len = m->m_pkthdr.len;
-	if (!m_append(m, NOISE_AUTHTAG_LEN, zeroed))
-		goto error;
-	/* TODO this is buffer overflow territory */
-	if ((m = m_defrag(m, M_NOWAIT)) == NULL)
-		goto error;
-
 	/* Do encryption */
-	noise_keypair_encrypt(pkt->p_keypair, &idx, pkt->p_nonce, mtod(m, uint8_t *), len);
+	if (noise_keypair_encrypt(pkt->p_keypair, &idx, pkt->p_nonce, m) != 0)
+		goto error;
 
 	/* Put header into packet */
 	M_PREPEND(m, sizeof(struct wg_pkt_data), M_NOWAIT);
@@ -1490,15 +1482,8 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	memcpy(&data, mtod(m, void *), sizeof(struct wg_pkt_data));
 	m_adj(m, sizeof(struct wg_pkt_data));
 
-	/* TODO teach noise_keypair_decrypt about mbufs. Currently we have to
-	 * resort to m_defrag to create an decryptable buffer. */
-	/* TODO this is buffer overflow territory */
-	if ((m = m_defrag(m, M_NOWAIT)) == NULL) {
-		goto error;
-	}
-
 	pkt->p_nonce = le64toh(data.nonce);
-	res = noise_keypair_decrypt(pkt->p_keypair, pkt->p_nonce, mtod(m, void *), m->m_pkthdr.len);
+	res = noise_keypair_decrypt(pkt->p_keypair, pkt->p_nonce, m);
 
 	if (__predict_false(res == EINVAL)) {
 		goto error;
@@ -1507,8 +1492,6 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	} else if (__predict_false(res != 0)) {
 		panic("unexpected response: %d\n", res);
 	}
-
-	m_adj(m, -NOISE_AUTHTAG_LEN);
 
 	/* A packet with length 0 is a keepalive packet */
 	if (__predict_false(m->m_pkthdr.len == 0)) {

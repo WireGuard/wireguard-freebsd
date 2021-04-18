@@ -7,6 +7,7 @@
 #define _WG_CRYPTO
 
 #include <sys/types.h>
+#include <sys/mbuf.h>
 
 enum chacha20poly1305_lengths {
 	XCHACHA20POLY1305_NONCE_SIZE = 24,
@@ -25,6 +26,14 @@ chacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
 			 const uint8_t *ad, const size_t ad_len,
 			 const uint64_t nonce,
 			 const uint8_t key[CHACHA20POLY1305_KEY_SIZE]);
+
+bool
+chacha20poly1305_encrypt_mbuf(struct mbuf *, const uint64_t nonce,
+			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE]);
+
+bool
+chacha20poly1305_decrypt_mbuf(struct mbuf *, const uint64_t nonce,
+			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE]);
 
 void
 xchacha20poly1305_encrypt(uint8_t *dst, const uint8_t *src,
