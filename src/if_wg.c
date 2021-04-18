@@ -169,11 +169,11 @@ struct wg_timers {
 };
 
 struct wg_aip {
-	struct radix_node	 r_nodes[2];
-	CK_LIST_ENTRY(wg_aip)	 r_entry;
-	struct sockaddr_storage	 r_addr;
-	struct sockaddr_storage	 r_mask;
-	struct wg_peer		*r_peer;
+	struct radix_node	 a_nodes[2];
+	LIST_ENTRY(wg_aip)	 a_entry;
+	struct sockaddr_storage	 a_addr;
+	struct sockaddr_storage	 a_mask;
+	struct wg_peer		*a_peer;
 };
 
 struct wg_packet {
@@ -224,29 +224,8 @@ struct wg_peer {
 	counter_u64_t			 p_tx_bytes;
 	counter_u64_t			 p_rx_bytes;
 
-	CK_LIST_HEAD(, wg_aip)		 p_aips;
-};
-
-enum route_direction {
-	/* TODO OpenBSD doesn't use IN/OUT, instead passes the address buffer
-	 * directly to route_lookup. */
-	IN,
-	OUT,
-};
-
-struct wg_aip_table {
-	size_t 			 t_count;
-	struct radix_node_head	*t_ip;
-	struct radix_node_head	*t_ip6;
-};
-
-struct wg_allowedip {
-	uint16_t family;
-	union {
-		struct in_addr ip4;
-		struct in6_addr ip6;
-	};
-	uint8_t cidr;
+	LIST_HEAD(, wg_aip)		 p_aips;
+	size_t				 p_aips_num;
 };
 
 struct wg_socket {
@@ -265,13 +244,15 @@ struct wg_softc {
 
 	struct ucred		*sc_ucred;
 	struct wg_socket	 sc_socket;
-	struct wg_aip_table	 sc_aips;
 
 	TAILQ_HEAD(,wg_peer)	 sc_peers;
 	size_t			 sc_peers_num;
 
 	struct noise_local	*sc_local;
 	struct cookie_checker	 sc_cookie;
+
+	struct radix_node_head	*sc_aip4;
+	struct radix_node_head	*sc_aip6;
 
 	struct grouptask	 sc_handshake;
 	struct wg_queue		 sc_handshake_queue;
@@ -350,18 +331,13 @@ static void wg_timers_enable(struct wg_timers *);
 static void wg_timers_disable(struct wg_timers *);
 static void wg_timers_set_persistent_keepalive(struct wg_timers *, uint16_t);
 static void wg_timers_get_last_handshake(struct wg_timers *, struct wg_timespec64 *);
-static int wg_aip_init(struct wg_aip_table *);
-static void wg_aip_destroy(struct wg_aip_table *);
-static void wg_aip_populate_aip4(struct wg_aip *, const struct in_addr *, uint8_t);
-static void wg_aip_populate_aip6(struct wg_aip *, const struct in6_addr *, uint8_t);
-static int wg_aip_add(struct wg_aip_table *, struct wg_peer *, const struct wg_allowedip *);
-static int wg_peer_remove(struct radix_node *, void *);
-static void wg_peer_remove_all(struct wg_softc *);
-static int wg_aip_delete(struct wg_aip_table *, struct wg_peer *);
-static struct wg_peer *wg_aip_lookup(struct wg_aip_table *, struct mbuf *, enum route_direction);
+static int wg_aip_add(struct wg_softc *, struct wg_peer *, sa_family_t, const void *, uint8_t);
+static struct wg_peer *wg_aip_lookup(struct wg_softc *, sa_family_t, void *);
+static void wg_aip_remove_all(struct wg_softc *, struct wg_peer *);
 static struct wg_peer *wg_peer_alloc(struct wg_softc *);
 static void wg_peer_free_deferred(struct noise_remote *);
 static void wg_peer_destroy(struct wg_peer *);
+static void wg_peer_destroy_all(struct wg_softc *);
 static void wg_peer_send_buf(struct wg_peer *, uint8_t *, size_t);
 static void wg_send_initiation(struct wg_peer *);
 static void wg_send_response(struct wg_peer *);
@@ -428,7 +404,8 @@ wg_peer_alloc(struct wg_softc *sc)
 	peer = malloc(sizeof(*peer), M_WG, M_WAITOK|M_ZERO);
 	peer->p_sc = sc;
 	peer->p_id = peer_counter++;
-	CK_LIST_INIT(&peer->p_aips);
+	LIST_INIT(&peer->p_aips);
+	peer->p_aips_num = 0;
 
 	rw_init(&peer->p_endpoint_lock, "wg_peer_endpoint");
 	wg_queue_init(&peer->p_stage_queue, "stageq");
@@ -467,11 +444,11 @@ wg_peer_free_deferred(struct noise_remote *r)
 static void
 wg_peer_destroy(struct wg_peer *peer)
 {
+	sx_assert(&peer->p_sc->sc_lock, SX_XLOCKED);
 	/* Callers should already have called:
 	 *    wg_hashtable_peer_remove(&sc->sc_hashtable, peer);
 	 */
-	wg_aip_delete(&peer->p_sc->sc_aips, peer);
-	MPASS(CK_LIST_EMPTY(&peer->p_aips));
+	wg_aip_remove_all(peer->p_sc, peer);
 
 	/* We disable all timers, so we can't call the following tasks. */
 	wg_timers_disable(&peer->p_timers);
@@ -496,6 +473,14 @@ wg_peer_destroy(struct wg_peer *peer)
 	TAILQ_REMOVE(&peer->p_sc->sc_peers, peer, p_entry);
 	DPRINTF(peer->p_sc, "Peer %lu destroyed\n", peer->p_id);
 	noise_remote_free(peer->p_remote, wg_peer_free_deferred);
+}
+
+static void
+wg_peer_destroy_all(struct wg_softc *sc)
+{
+	struct wg_peer *peer, *tpeer;
+	TAILQ_FOREACH_SAFE(peer, &sc->sc_peers, p_entry, tpeer)
+		wg_peer_destroy(peer);
 }
 
 static void
@@ -528,265 +513,147 @@ wg_peer_get_endpoint(struct wg_peer *peer, struct wg_endpoint *e)
 
 /* Allowed IP */
 static int
-wg_aip_init(struct wg_aip_table *tbl)
+wg_aip_add(struct wg_softc *sc, struct wg_peer *peer, sa_family_t af, const void *addr, uint8_t cidr)
 {
-	int rc;
-
-	tbl->t_count = 0;
-	rc = rn_inithead((void **)&tbl->t_ip,
-	    offsetof(struct sockaddr_in, sin_addr) * NBBY);
-
-	if (rc == 0)
-		return (ENOMEM);
-	RADIX_NODE_HEAD_LOCK_INIT(tbl->t_ip);
-#ifdef INET6
-	rc = rn_inithead((void **)&tbl->t_ip6,
-	    offsetof(struct sockaddr_in6, sin6_addr) * NBBY);
-	if (rc == 0) {
-		free(tbl->t_ip, M_RTABLE);
-		return (ENOMEM);
-	}
-	RADIX_NODE_HEAD_LOCK_INIT(tbl->t_ip6);
-#endif
-	return (0);
-}
-
-static void
-wg_aip_destroy(struct wg_aip_table *tbl)
-{
-	RADIX_NODE_HEAD_DESTROY(tbl->t_ip);
-	free(tbl->t_ip, M_RTABLE);
-#ifdef INET6
-	RADIX_NODE_HEAD_DESTROY(tbl->t_ip6);
-	free(tbl->t_ip6, M_RTABLE);
-#endif
-}
-
-static void
-wg_aip_populate_aip4(struct wg_aip *aip, const struct in_addr *addr,
-    uint8_t mask)
-{
-	struct sockaddr_in *raddr, *rmask;
-	uint8_t *p;
-	unsigned int i;
-
-	raddr = (struct sockaddr_in *)&aip->r_addr;
-	rmask = (struct sockaddr_in *)&aip->r_mask;
-
-	raddr->sin_len = sizeof(*raddr);
-	raddr->sin_family = AF_INET;
-	raddr->sin_addr = *addr;
-
-	rmask->sin_len = sizeof(*rmask);
-	p = (uint8_t *)&rmask->sin_addr.s_addr;
-	for (i = 0; i < mask / NBBY; i++)
-		p[i] = 0xff;
-	if ((mask % NBBY) != 0)
-		p[i] = (0xff00 >> (mask % NBBY)) & 0xff;
-	raddr->sin_addr.s_addr &= rmask->sin_addr.s_addr;
-}
-
-static void
-wg_aip_populate_aip6(struct wg_aip *aip, const struct in6_addr *addr,
-    uint8_t mask)
-{
-	struct sockaddr_in6 *raddr, *rmask;
-
-	raddr = (struct sockaddr_in6 *)&aip->r_addr;
-	rmask = (struct sockaddr_in6 *)&aip->r_mask;
-
-	raddr->sin6_len = sizeof(*raddr);
-	raddr->sin6_family = AF_INET6;
-	raddr->sin6_addr = *addr;
-
-	rmask->sin6_len = sizeof(*rmask);
-	in6_prefixlen2mask(&rmask->sin6_addr, mask);
-	for (int i = 0; i < 4; ++i)
-		raddr->sin6_addr.__u6_addr.__u6_addr32[i] &= rmask->sin6_addr.__u6_addr.__u6_addr32[i];
-}
-
-/* wg_aip_take assumes that the caller guarantees the allowed-ip exists. */
-static void
-wg_aip_take(struct radix_node_head *root, struct wg_peer *peer,
-    struct wg_aip *route)
-{
-	struct radix_node *node;
-	struct wg_peer *ppeer;
-
-	RADIX_NODE_HEAD_LOCK_ASSERT(root);
-
-	node = root->rnh_lookup(&route->r_addr, &route->r_mask,
-	    &root->rh);
-	MPASS(node != NULL);
-
-	route = (struct wg_aip *)node;
-	ppeer = route->r_peer;
-	if (ppeer != peer) {
-		route->r_peer = peer;
-
-		CK_LIST_REMOVE(route, r_entry);
-		CK_LIST_INSERT_HEAD(&peer->p_aips, route, r_entry);
-	}
-}
-
-static int
-wg_aip_add(struct wg_aip_table *tbl, struct wg_peer *peer,
-			 const struct wg_allowedip *aip)
-{
-	struct radix_node	*node;
 	struct radix_node_head	*root;
-	struct wg_aip *route;
-	sa_family_t family;
-	bool needfree = false;
+	struct radix_node	*node;
+	struct wg_aip		*aip;
+	struct sockaddr_in	*sin_addr, *sin_mask;
+	struct sockaddr_in6	*sin6_addr, *sin6_mask;
+	int			 i, need_free = 0, ret = 0;
 
-	family = aip->family;
-	if (family != AF_INET && family != AF_INET6) {
-		return (EINVAL);
-	}
+	if ((aip = malloc(sizeof(*aip), M_WG, M_NOWAIT | M_ZERO)) == NULL)
+		return (ENOBUFS);
 
-	route = malloc(sizeof(*route), M_WG, M_WAITOK|M_ZERO);
-	switch (family) {
+	switch (af) {
 	case AF_INET:
-		root = tbl->t_ip;
+		if (cidr > 32) cidr = 32;
+		root = sc->sc_aip4;
 
-		wg_aip_populate_aip4(route, &aip->ip4, aip->cidr);
+		sin_addr = (struct sockaddr_in *)&aip->a_addr;
+		sin_mask = (struct sockaddr_in *)&aip->a_mask;
+
+		sin_addr->sin_len = sizeof(struct sockaddr_in);
+		sin_addr->sin_family = AF_INET;
+		sin_addr->sin_addr = *(const struct in_addr *)addr;
+
+		sin_mask->sin_len = sizeof(struct sockaddr_in);
+		sin_mask->sin_addr.s_addr =
+		    htonl(~((1LL << (32 - cidr)) - 1) & 0xffffffff);
+		sin_addr->sin_addr.s_addr &= sin_mask->sin_addr.s_addr;
 		break;
 	case AF_INET6:
-		root = tbl->t_ip6;
+		if (cidr > 128) cidr = 128;
+		root = sc->sc_aip6;
 
-		wg_aip_populate_aip6(route, &aip->ip6, aip->cidr);
+		sin6_addr = (struct sockaddr_in6 *)&aip->a_addr;
+		sin6_mask = (struct sockaddr_in6 *)&aip->a_mask;
+
+		sin6_addr->sin6_len = sizeof(struct sockaddr_in6);
+		sin6_addr->sin6_family = AF_INET6;
+		sin6_addr->sin6_addr = *(const struct in6_addr *)addr;
+
+		sin6_mask->sin6_len = sizeof(struct sockaddr_in6);
+		in6_prefixlen2mask(&sin6_mask->sin6_addr, cidr);
+		for (i = 0; i < 4; i++)
+			sin6_addr->sin6_addr.__u6_addr.__u6_addr32[i] &=
+			sin6_mask->sin6_addr.__u6_addr.__u6_addr32[i];
 		break;
+	default:
+		free(aip, M_WG);
+		return (EAFNOSUPPORT);
 	}
 
-	route->r_peer = peer;
+	aip->a_peer = peer;
 
 	RADIX_NODE_HEAD_LOCK(root);
-	node = root->rnh_addaddr(&route->r_addr, &route->r_mask, &root->rh,
-							route->r_nodes);
-	if (node == route->r_nodes) {
-		tbl->t_count++;
-		CK_LIST_INSERT_HEAD(&peer->p_aips, route, r_entry);
+	node = root->rnh_addaddr(&aip->a_addr, &aip->a_mask, &root->rh, aip->a_nodes);
+
+	if (node == aip->a_nodes) {
+		LIST_INSERT_HEAD(&peer->p_aips, aip, a_entry);
+		peer->p_aips_num++;
 	} else {
-		needfree = true;
-		wg_aip_take(root, peer, route);
+		need_free = 1;
+		aip = (struct wg_aip *) node;
+		if (aip->a_peer != peer) {
+			LIST_REMOVE(aip, a_entry);
+			aip->a_peer->p_aips_num--;
+			aip->a_peer = peer;
+			LIST_INSERT_HEAD(&peer->p_aips, aip, a_entry);
+			aip->a_peer->p_aips_num++;
+		}
 	}
 	RADIX_NODE_HEAD_UNLOCK(root);
-	if (needfree) {
-		free(route, M_WG);
-	}
-	return (0);
+	if (need_free)
+		free(aip, M_WG);
+	return (ret);
 }
 
 static struct wg_peer *
-wg_aip_lookup(struct wg_aip_table *tbl, struct mbuf *m,
-		enum route_direction dir)
+wg_aip_lookup(struct wg_softc *sc, sa_family_t af, void *addr)
 {
-	RADIX_NODE_HEAD_RLOCK_TRACKER;
-	struct ip *iphdr;
-	struct ip6_hdr *ip6hdr;
-	struct radix_node_head *root;
+	struct radix_node_head	*root;
 	struct radix_node	*node;
-	struct wg_peer	*peer = NULL;
-	struct sockaddr_in sin;
-	struct sockaddr_in6 sin6;
-	void *addr;
-	int version;
+	struct wg_peer		*peer;
+	struct sockaddr_storage	 ss;
+	struct sockaddr_in	*sin = (struct sockaddr_in *)&ss;
+	struct sockaddr_in6	*sin6 = (struct sockaddr_in6 *)&ss;
+	RADIX_NODE_HEAD_RLOCK_TRACKER;
 
-	NET_EPOCH_ASSERT();
-	iphdr = mtod(m, struct ip *);
-	version = iphdr->ip_v;
-
-	if (__predict_false(dir != IN && dir != OUT))
-		return NULL;
-
-	if (version == 4) {
-		root = tbl->t_ip;
-		memset(&sin, 0, sizeof(sin));
-		sin.sin_len = sizeof(struct sockaddr_in);
-		if (dir == IN)
-			sin.sin_addr = iphdr->ip_src;
-		else
-			sin.sin_addr = iphdr->ip_dst;
-		addr = &sin;
-	} else if (version == 6) {
-		ip6hdr = mtod(m, struct ip6_hdr *);
-		memset(&sin6, 0, sizeof(sin6));
-		sin6.sin6_len = sizeof(struct sockaddr_in6);
-
-		root = tbl->t_ip6;
-		if (dir == IN)
-			addr = &ip6hdr->ip6_src;
-		else
-			addr = &ip6hdr->ip6_dst;
-		memcpy(&sin6.sin6_addr, addr, sizeof(sin6.sin6_addr));
-		addr = &sin6;
-	} else  {
-		return (NULL);
+	switch (af) {
+	case AF_INET:
+		root = sc->sc_aip4;
+		sin->sin_len = sizeof(struct sockaddr_in);
+		sin->sin_addr = *(struct in_addr *)addr;
+		break;
+	case AF_INET6:
+		root = sc->sc_aip6;
+		sin6->sin6_len = sizeof(struct sockaddr_in6);
+		sin6->sin6_addr = *(struct in6_addr *)addr;
+		break;
+	default:
+		panic("invalid wg_aip_lookup af");
 	}
+
 	RADIX_NODE_HEAD_RLOCK(root);
-	if ((node = root->rnh_matchaddr(addr, &root->rh)) != NULL) {
-		peer = ((struct wg_aip *) node)->r_peer;
-	}
+	node = root->rnh_matchaddr((struct sockaddr *)&ss, &root->rh);
+	peer = node != NULL ? ((struct wg_aip *) node)->a_peer : NULL;
 	RADIX_NODE_HEAD_RUNLOCK(root);
+
 	return (peer);
 }
 
-struct peer_del_arg {
-	struct radix_node_head * pda_head;
-	struct wg_peer *pda_peer;
-	struct wg_aip_table *pda_tbl;
-};
-
-static int
-wg_peer_remove(struct radix_node *rn, void *arg)
-{
-	struct peer_del_arg *pda = arg;
-	struct wg_peer *peer = pda->pda_peer;
-	struct radix_node_head * rnh = pda->pda_head;
-	struct wg_aip_table *tbl = pda->pda_tbl;
-	struct wg_aip *route = (struct wg_aip *)rn;
-	struct radix_node *x;
-
-	if (route->r_peer != peer)
-		return (0);
-	x = (struct radix_node *)rnh->rnh_deladdr(&route->r_addr,
-	    &route->r_mask, &rnh->rh);
-	if (x != NULL)	 {
-		tbl->t_count--;
-		CK_LIST_REMOVE(route, r_entry);
-		free(route, M_WG);
-	}
-	return (0);
-}
-
 static void
-wg_peer_remove_all(struct wg_softc *sc)
+wg_aip_remove_all(struct wg_softc *sc, struct wg_peer *peer)
 {
-	struct wg_peer *peer, *tpeer;
+	struct wg_aip		*aip, *taip;
 
-	sx_assert(&sc->sc_lock, SX_XLOCKED);
+	RADIX_NODE_HEAD_LOCK(sc->sc_aip4);
+	LIST_FOREACH_SAFE(aip, &peer->p_aips, a_entry, taip) {
+		if (aip->a_addr.ss_family == AF_INET) {
+			if (sc->sc_aip4->rnh_deladdr(&aip->a_addr, &aip->a_mask, &sc->sc_aip4->rh) == NULL)
+				panic("art_delete failed to delete aip %p", aip);
+			LIST_REMOVE(aip, a_entry);
+			peer->p_aips_num--;
+			free(aip, M_WG);
+		}
+	}
+	RADIX_NODE_HEAD_UNLOCK(sc->sc_aip4);
 
-	TAILQ_FOREACH_SAFE(peer, &sc->sc_peers, p_entry, tpeer)
-		wg_peer_destroy(peer);
-}
+	RADIX_NODE_HEAD_LOCK(sc->sc_aip6);
+	LIST_FOREACH_SAFE(aip, &peer->p_aips, a_entry, taip) {
+		if (aip->a_addr.ss_family == AF_INET6) {
+			if (sc->sc_aip6->rnh_deladdr(&aip->a_addr, &aip->a_mask, &sc->sc_aip6->rh) == NULL)
+				panic("art_delete failed to delete aip %p", aip);
+			LIST_REMOVE(aip, a_entry);
+			peer->p_aips_num--;
+			free(aip, M_WG);
+		}
+	}
+	RADIX_NODE_HEAD_UNLOCK(sc->sc_aip6);
 
-static int
-wg_aip_delete(struct wg_aip_table *tbl, struct wg_peer *peer)
-{
-	struct peer_del_arg pda;
-
-	pda.pda_peer = peer;
-	pda.pda_tbl = tbl;
-	RADIX_NODE_HEAD_LOCK(tbl->t_ip);
-	pda.pda_head = tbl->t_ip;
-	rn_walktree(&tbl->t_ip->rh, wg_peer_remove, &pda);
-	RADIX_NODE_HEAD_UNLOCK(tbl->t_ip);
-
-	RADIX_NODE_HEAD_LOCK(tbl->t_ip6);
-	pda.pda_head = tbl->t_ip6;
-	rn_walktree(&tbl->t_ip6->rh, wg_peer_remove, &pda);
-	RADIX_NODE_HEAD_UNLOCK(tbl->t_ip6);
-	return (0);
+	if (!LIST_EMPTY(&peer->p_aips) || peer->p_aips_num != 0)
+		panic("wg_aip_remove_all could not delete all %p", peer);
 }
 
 static int
@@ -1665,7 +1532,7 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 		if (len >= sizeof(struct ip) && len < m->m_pkthdr.len)
 			m_adj(m, len - m->m_pkthdr.len);
 
-		allowed_peer = wg_aip_lookup(&peer->p_sc->sc_aips, m, IN);
+		allowed_peer = wg_aip_lookup(sc, AF_INET, &ip->ip_src);
 	} else if (m->m_pkthdr.len >= sizeof(struct ip6_hdr) &&
 	    (ip6->ip6_vfc & IPV6_VERSION_MASK) == IPV6_VERSION) {
 		pkt->p_af = AF_INET6;
@@ -1674,7 +1541,7 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 		if (len < m->m_pkthdr.len)
 			m_adj(m, len - m->m_pkthdr.len);
 
-		allowed_peer = wg_aip_lookup(&peer->p_sc->sc_aips, m, IN);
+		allowed_peer = wg_aip_lookup(sc, AF_INET6, &ip6->ip6_src);
 	} else {
 		DPRINTF(sc, "Packet is neither ipv4 nor ipv6 from " "peer %lu\n", peer->p_id);
 		goto error;
@@ -2156,9 +2023,9 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 	BPF_MTAP2(ifp, &af, sizeof(af), m);
 
 	if (pkt->p_af == AF_INET) {
-		peer = wg_aip_lookup(&sc->sc_aips, m, OUT);
+		peer = wg_aip_lookup(sc, AF_INET, &mtod(m, struct ip *)->ip_dst);
 	} else if (pkt->p_af == AF_INET6) {
-		peer = wg_aip_lookup(&sc->sc_aips, m, OUT);
+		peer = wg_aip_lookup(sc, AF_INET6, &mtod(m, struct ip6_hdr *)->ip6_dst);
 	} else {
 		rc = EAFNOSUPPORT;
 		goto err;
@@ -2249,7 +2116,7 @@ wg_peer_add(struct wg_softc *sc, const nvlist_t *nvl)
 		nvlist_get_bool(nvl, "replace-allowedips") &&
 	    peer != NULL) {
 
-		wg_aip_delete(&peer->p_sc->sc_aips, peer);
+		wg_aip_remove_all(sc, peer);
 	}
 	if (peer == NULL) {
 		need_insert = true;
@@ -2283,41 +2150,34 @@ wg_peer_add(struct wg_softc *sc, const nvlist_t *nvl)
 		wg_timers_set_persistent_keepalive(&peer->p_timers, pki);
 	}
 	if (nvlist_exists_nvlist_array(nvl, "allowed-ips")) {
-		const void *binary;
+		const void *addr;
 		uint64_t cidr;
 		const nvlist_t * const * aipl;
-		struct wg_allowedip aip;
 		size_t allowedip_count;
 
-		aipl = nvlist_get_nvlist_array(nvl, "allowed-ips",
-		    &allowedip_count);
+		aipl = nvlist_get_nvlist_array(nvl, "allowed-ips", &allowedip_count);
 		for (size_t idx = 0; idx < allowedip_count; idx++) {
 			if (!nvlist_exists_number(aipl[idx], "cidr"))
 				continue;
 			cidr = nvlist_get_number(aipl[idx], "cidr");
 			if (nvlist_exists_binary(aipl[idx], "ipv4")) {
-				binary = nvlist_get_binary(aipl[idx], "ipv4", &size);
-				if (binary == NULL || cidr > 32 || size != sizeof(aip.ip4)) {
+				addr = nvlist_get_binary(aipl[idx], "ipv4", &size);
+				if (addr == NULL || cidr > 32 || size != sizeof(struct in_addr)) {
 					err = EINVAL;
 					goto out;
 				}
-				aip.family = AF_INET;
-				memcpy(&aip.ip4, binary, sizeof(aip.ip4));
+				if ((err = wg_aip_add(sc, peer, AF_INET, addr, cidr)) != 0)
+					goto out;
 			} else if (nvlist_exists_binary(aipl[idx], "ipv6")) {
-				binary = nvlist_get_binary(aipl[idx], "ipv6", &size);
-				if (binary == NULL || cidr > 128 || size != sizeof(aip.ip6)) {
+				addr = nvlist_get_binary(aipl[idx], "ipv6", &size);
+				if (addr == NULL || cidr > 128 || size != sizeof(struct in6_addr)) {
 					err = EINVAL;
 					goto out;
 				}
-				aip.family = AF_INET6;
-				memcpy(&aip.ip6, binary, sizeof(aip.ip6));
+				if ((err = wg_aip_add(sc, peer, AF_INET6, addr, cidr)) != 0)
+					goto out;
 			} else {
 				continue;
-			}
-			aip.cidr = cidr;
-
-			if ((err = wg_aip_add(&sc->sc_aips, peer, &aip)) != 0) {
-				goto out;
 			}
 		}
 	}
@@ -2370,7 +2230,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	}
 	if (nvlist_exists_bool(nvl, "replace-peers") &&
 		nvlist_get_bool(nvl, "replace-peers"))
-		wg_peer_remove_all(sc);
+		wg_peer_destroy_all(sc);
 	if (nvlist_exists_number(nvl, "listen-port")) {
 		uint64_t new_port = nvlist_get_number(nvl, "listen-port");
 		if (new_port > UINT16_MAX) {
@@ -2459,7 +2319,7 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 	size_t size, peer_count, aip_count, i, j;
 	struct wg_timespec64 ts64;
 	struct wg_peer *peer;
-	struct wg_aip *rt;
+	struct wg_aip *aip;
 	void *packed;
 	int err = 0;
 
@@ -2508,14 +2368,11 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 			nvlist_add_number(nvl_peer, "rx-bytes", counter_u64_fetch(peer->p_rx_bytes));
 			nvlist_add_number(nvl_peer, "tx-bytes", counter_u64_fetch(peer->p_tx_bytes));
 
-			aip_count = 0;
-			CK_LIST_FOREACH(rt, &peer->p_aips, r_entry) {
-				++aip_count;
-			}
+			aip_count = peer->p_aips_num;
 			if (aip_count) {
 				nvl_aips = mallocarray(aip_count, sizeof(void *), M_NVLIST, M_WAITOK | M_ZERO);
 				j = 0;
-				CK_LIST_FOREACH(rt, &peer->p_aips, r_entry) {
+				LIST_FOREACH(aip, &peer->p_aips, a_entry) {
 					if (j >= aip_count)
 						panic("aips changed from under us");
 
@@ -2524,15 +2381,15 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 						err = ENOMEM;
 						goto err_aip;
 					}
-					if (rt->r_addr.ss_family == AF_INET) {
-						struct sockaddr_in *sin = (struct sockaddr_in *)&rt->r_addr;
+					if (aip->a_addr.ss_family == AF_INET) {
+						struct sockaddr_in *sin = (struct sockaddr_in *)&aip->a_addr;
 						nvlist_add_binary(nvl_aip, "ipv4", &sin->sin_addr, sizeof(sin->sin_addr));
-						sin = (struct sockaddr_in *)&rt->r_mask;
+						sin = (struct sockaddr_in *)&aip->a_mask;
 						nvlist_add_number(nvl_aip, "cidr", __builtin_popcount(sin->sin_addr.s_addr));
-					} else if (rt->r_addr.ss_family == AF_INET6) {
-						struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&rt->r_addr;
+					} else if (aip->a_addr.ss_family == AF_INET6) {
+						struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&aip->a_addr;
 						nvlist_add_binary(nvl_aip, "ipv6", &sin6->sin6_addr, sizeof(sin6->sin6_addr));
-						sin6 = (struct sockaddr_in6 *)&rt->r_mask;
+						sin6 = (struct sockaddr_in6 *)&aip->a_mask;
 						nvlist_add_number(nvl_aip, "cidr", in6_mask2len(&sin6->sin6_addr, NULL));
 					}
 				}
@@ -2779,8 +2636,11 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	wg_queue_init(&sc->sc_encrypt_parallel, "encp");
 	wg_queue_init(&sc->sc_decrypt_parallel, "decp");
 
-
-	wg_aip_init(&sc->sc_aips);
+	/* TODO check rn_inithead return value */
+	rn_inithead((void **)&sc->sc_aip4, offsetof(struct sockaddr_in, sin_addr)*NBBY);
+	rn_inithead((void **)&sc->sc_aip6, offsetof(struct sockaddr_in6, sin6_addr)*NBBY);
+	RADIX_NODE_HEAD_LOCK_INIT(sc->sc_aip4);
+	RADIX_NODE_HEAD_LOCK_INIT(sc->sc_aip6);
 
 	if_setmtu(ifp, ETHERMTU - 80);
 	ifp->if_flags = IFF_NOARP | IFF_MULTICAST;
@@ -2847,7 +2707,7 @@ wg_clone_destroy(struct ifnet *ifp)
 
 	taskqgroup_drain_all(qgroup_wg_tqg);
 	sx_xlock(&sc->sc_lock);
-	wg_peer_remove_all(sc);
+	wg_peer_destroy_all(sc);
 	epoch_drain_callbacks(net_epoch_preempt);
 	sx_xunlock(&sc->sc_lock);
 	sx_destroy(&sc->sc_lock);
@@ -2857,7 +2717,10 @@ wg_clone_destroy(struct ifnet *ifp)
 	wg_queue_deinit(&sc->sc_encrypt_parallel);
 	wg_queue_deinit(&sc->sc_decrypt_parallel);
 
-	wg_aip_destroy(&sc->sc_aips);
+	RADIX_NODE_HEAD_DESTROY(sc->sc_aip4);
+	RADIX_NODE_HEAD_DESTROY(sc->sc_aip6);
+	free(sc->sc_aip4, M_RTABLE);
+	free(sc->sc_aip6, M_RTABLE);
 
 	if (cred != NULL)
 		crfree(cred);
