@@ -729,7 +729,7 @@ static int wg_socket_set_sockopt(struct socket *so4, struct socket *so6, int nam
 		ret4 = sosetopt(so4, &sopt);
 	if (so6)
 		ret6 = sosetopt(so6, &sopt);
-	return ret4 ?: ret6;
+	return (ret4 ?: ret6);
 }
 
 static int wg_socket_set_cookie(struct wg_softc *sc, uint32_t user_cookie)
@@ -741,7 +741,7 @@ static int wg_socket_set_cookie(struct wg_softc *sc, uint32_t user_cookie)
 	ret = wg_socket_set_sockopt(so->so_so4, so->so_so6, SO_USER_COOKIE, &user_cookie, sizeof(user_cookie));
 	if (!ret)
 		so->so_user_cookie = user_cookie;
-	return ret;
+	return (ret);
 }
 
 static int wg_socket_set_fibnum(struct wg_softc *sc, int fibnum)
@@ -754,7 +754,7 @@ static int wg_socket_set_fibnum(struct wg_softc *sc, int fibnum)
 	ret = wg_socket_set_sockopt(so->so_so4, so->so_so6, SO_SETFIB, &fibnum, sizeof(fibnum));
 	if (!ret)
 		so->so_fibnum = fibnum;
-	return ret;
+	return (ret);
 }
 
 static void
@@ -805,12 +805,12 @@ wg_socket_bind(struct socket **in_so4, struct socket **in_so6, in_port_t *reques
 	if (so4) {
 		ret4 = sobind(so4, (struct sockaddr *)&sin, curthread);
 		if (ret4 && ret4 != EADDRNOTAVAIL)
-			return ret4;
+			return (ret4);
 		if (!ret4 && !sin.sin_port) {
 			struct sockaddr_in *bound_sin;
 			int ret = sogetsockaddr(so4, (struct sockaddr **)&bound_sin);
 			if (ret)
-				return ret;
+				return (ret);
 			port = ntohs(bound_sin->sin_port);
 			sin6.sin6_port = bound_sin->sin_port;
 			free(bound_sin, M_SONAME);
@@ -820,19 +820,19 @@ wg_socket_bind(struct socket **in_so4, struct socket **in_so6, in_port_t *reques
 	if (so6) {
 		ret6 = sobind(so6, (struct sockaddr *)&sin6, curthread);
 		if (ret6 && ret6 != EADDRNOTAVAIL)
-			return ret6;
+			return (ret6);
 		if (!ret6 && !sin6.sin6_port) {
 			struct sockaddr_in6 *bound_sin6;
 			int ret = sogetsockaddr(so6, (struct sockaddr **)&bound_sin6);
 			if (ret)
-				return ret;
+				return (ret);
 			port = ntohs(bound_sin6->sin6_port);
 			free(bound_sin6, M_SONAME);
 		}
 	}
 
 	if (ret4 && ret6)
-		return ret4;
+		return (ret4);
 	*requested_port = port;
 	if (ret4 && !ret6 && so4) {
 		soclose(so4);
@@ -841,7 +841,7 @@ wg_socket_bind(struct socket **in_so4, struct socket **in_so6, in_port_t *reques
 		soclose(so6);
 		*in_so6 = NULL;
 	}
-	return 0;
+	return (0);
 }
 
 static int
@@ -1687,12 +1687,12 @@ wg_packet_alloc(struct mbuf *m)
 
 	if ((pkt = uma_zalloc(wg_packet_zone, M_NOWAIT)) == NULL) {
 		m_freem(m);
-		return NULL;
+		return (NULL);
 	}
 
 	pkt->p_keypair = NULL;
 	pkt->p_mbuf = m;
-	return pkt;
+	return (pkt);
 }
 
 static void
@@ -1727,7 +1727,7 @@ wg_queue_len(struct wg_queue *queue)
 	mtx_lock(&queue->q_mtx);
 	len = queue->q_len;
 	mtx_unlock(&queue->q_mtx);
-	return len;
+	return (len);
 }
 
 static int
@@ -1744,7 +1744,7 @@ wg_queue_enqueue_handshake(struct wg_queue *hs, struct wg_packet *pkt)
 	mtx_unlock(&hs->q_mtx);
 	if (ret != 0)
 		wg_packet_free(pkt);
-	return ret;
+	return (ret);
 }
 
 static struct wg_packet *
@@ -1757,7 +1757,7 @@ wg_queue_dequeue_handshake(struct wg_queue *hs)
 		hs->q_len--;
 	}
 	mtx_unlock(&hs->q_mtx);
-	return pkt;
+	return (pkt);
 }
 
 static void
@@ -1819,7 +1819,7 @@ wg_queue_both(struct wg_queue *parallel, struct wg_queue *serial, struct wg_pack
 	} else {
 		mtx_unlock(&serial->q_mtx);
 		wg_packet_free(pkt);
-		return ENOBUFS;
+		return (ENOBUFS);
 	}
 	mtx_unlock(&serial->q_mtx);
 
@@ -1830,11 +1830,11 @@ wg_queue_both(struct wg_queue *parallel, struct wg_queue *serial, struct wg_pack
 	} else {
 		mtx_unlock(&parallel->q_mtx);
 		pkt->p_state = WG_PACKET_DEAD;
-		return ENOBUFS;
+		return (ENOBUFS);
 	}
 	mtx_unlock(&parallel->q_mtx);
 
-	return 0;
+	return (0);
 }
 
 static struct wg_packet *
@@ -1848,7 +1848,7 @@ wg_queue_dequeue_serial(struct wg_queue *serial)
 		STAILQ_REMOVE_HEAD(&serial->q_queue, p_serial);
 	}
 	mtx_unlock(&serial->q_mtx);
-	return pkt;
+	return (pkt);
 }
 
 static struct wg_packet *
@@ -1862,7 +1862,7 @@ wg_queue_dequeue_parallel(struct wg_queue *parallel)
 		STAILQ_REMOVE_HEAD(&parallel->q_queue, p_parallel);
 	}
 	mtx_unlock(&parallel->q_mtx);
-	return pkt;
+	return (pkt);
 }
 
 static void
@@ -2045,7 +2045,7 @@ wg_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *sa, struct r
 	struct wg_packet *pkt;
 
 	if ((pkt = wg_packet_alloc(m)) == NULL)
-		return ENOBUFS;
+		return (ENOBUFS);
 
 	pkt->p_af = sa->sa_family;
 	pkt->p_mtu = (ro != NULL && ro->ro_mtu > 0) ? ro->ro_mtu : ifp->if_mtu;
@@ -2300,7 +2300,7 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 
 	nvl = nvlist_create(0);
 	if (!nvl)
-		return ENOMEM;
+		return (ENOMEM);
 
 	sx_slock(&sc->sc_lock);
 
@@ -2411,7 +2411,7 @@ out:
 err:
 	nvlist_destroy(nvl);
 	sx_sunlock(&sc->sc_lock);
-	return err;
+	return (err);
 }
 
 static int
@@ -2480,7 +2480,7 @@ wg_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 
 out:
 	sx_sunlock(&wg_sx);
-	return ret;
+	return (ret);
 }
 
 static int
@@ -2592,7 +2592,7 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 
 	if ((sc->sc_local = noise_local_alloc(sc)) == NULL) {
 		free(sc, M_WG);
-		return ENOMEM;
+		return (ENOMEM);
 	}
 
 	/* TODO check checker_init return value */
@@ -2637,7 +2637,7 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	LIST_INSERT_HEAD(&wg_list, sc, sc_entry);
 	sx_xunlock(&wg_sx);
 
-	return 0;
+	return (0);
 }
 
 static void
