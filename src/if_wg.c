@@ -917,16 +917,14 @@ wg_aip_delete(struct wg_aip_table *tbl, struct wg_peer *peer)
 static int
 wg_socket_init(struct wg_softc *sc, in_port_t port)
 {
-	struct thread *td;
-	struct ucred *cred;
-	struct socket *so4, *so6;
+	struct thread *td = curthread;
+	struct ucred *cred = sc->sc_ucred;
+	struct socket *so4 = NULL, *so6 = NULL;
 	int rc;
 
 	sx_assert(&sc->sc_lock, SX_XLOCKED);
 
-	so4 = so6 = NULL;
-	td = curthread;
-	if ((cred = sc->sc_ucred) == NULL)
+	if (!cred)
 		return (EBUSY);
 
 	/*
@@ -938,7 +936,7 @@ wg_socket_init(struct wg_softc *sc, in_port_t port)
 	 * to the network.
 	 */
 	rc = socreate(AF_INET, &so4, SOCK_DGRAM, IPPROTO_UDP, cred, td);
-	if (rc != 0)
+	if (rc)
 		goto out;
 
 	rc = udp_set_kernel_tunneling(so4, wg_input, NULL, sc);
@@ -948,11 +946,13 @@ wg_socket_init(struct wg_softc *sc, in_port_t port)
 	 */
 	MPASS(rc == 0);
 
+#ifdef INET6
 	rc = socreate(AF_INET6, &so6, SOCK_DGRAM, IPPROTO_UDP, cred, td);
-	if (rc != 0)
+	if (rc)
 		goto out;
 	rc = udp_set_kernel_tunneling(so6, wg_input, NULL, sc);
 	MPASS(rc == 0);
+#endif
 
 	if (sc->sc_socket.so_user_cookie) {
 		rc = wg_socket_set_sockopt(so4, so6, SO_USER_COOKIE, &sc->sc_socket.so_user_cookie, sizeof(sc->sc_socket.so_user_cookie));
@@ -964,12 +964,12 @@ wg_socket_init(struct wg_softc *sc, in_port_t port)
 		goto out;
 
 	rc = wg_socket_bind(so4, so6, &port);
-	if (rc == 0) {
+	if (!rc) {
 		sc->sc_socket.so_port = port;
 		wg_socket_set(sc, so4, so6);
 	}
 out:
-	if (rc != 0) {
+	if (rc) {
 		if (so4 != NULL)
 			soclose(so4);
 		if (so6 != NULL)
@@ -1049,51 +1049,44 @@ wg_socket_set(struct wg_softc *sc, struct socket *new_so4, struct socket *new_so
 		soclose(so6);
 }
 
-union wg_sockaddr {
-	struct sockaddr sa;
-	struct sockaddr_in in4;
-	struct sockaddr_in6 in6;
-};
-
 static int
 wg_socket_bind(struct socket *so4, struct socket *so6, in_port_t *requested_port)
 {
-	int rc;
-	struct thread *td;
-	union wg_sockaddr laddr;
-	struct sockaddr_in *sin;
-	struct sockaddr_in6 *sin6;
+	int ret;
 	in_port_t port = *requested_port;
+	struct sockaddr_in sin = {
+		.sin_len = sizeof(struct sockaddr_in),
+		.sin_family = AF_INET,
+		.sin_port = htons(port)
+	};
+	struct sockaddr_in6 sin6 = {
+		.sin6_len = sizeof(struct sockaddr_in6),
+		.sin6_family = AF_INET6,
+		.sin6_port = htons(port)
+	};
 
-	td = curthread;
-	bzero(&laddr, sizeof(laddr));
-	sin = &laddr.in4;
-	sin->sin_len = sizeof(laddr.in4);
-	sin->sin_family = AF_INET;
-	sin->sin_port = htons(port);
-	sin->sin_addr = (struct in_addr) { 0 };
-
-	if ((rc = sobind(so4, &laddr.sa, td)) != 0)
-		return (rc);
+	ret = sobind(so4, (struct sockaddr *)&sin, curthread);
+	if (ret)
+		return ret;
 
 	if (port == 0) {
-		rc = sogetsockaddr(so4, (struct sockaddr **)&sin);
-		if (rc != 0)
-			return (rc);
-		port = ntohs(sin->sin_port);
-		free(sin, M_SONAME);
+		struct sockaddr_in *bound_sin;
+		ret = sogetsockaddr(so4, (struct sockaddr **)&bound_sin);
+		if (ret)
+			return ret;
+		port = ntohs(bound_sin->sin_port);
+		sin6.sin6_port = bound_sin->sin_port;
+		free(bound_sin, M_SONAME);
 	}
 
-	sin6 = &laddr.in6;
-	sin6->sin6_len = sizeof(laddr.in6);
-	sin6->sin6_family = AF_INET6;
-	sin6->sin6_port = htons(port);
-	sin6->sin6_addr = (struct in6_addr) { .s6_addr = { 0 } };
-	rc = sobind(so6, &laddr.sa, td);
-	if (rc != 0)
-		return (rc);
+#ifdef INET6
+	ret = sobind(so6, (struct sockaddr *)&sin6, curthread);
+	if (ret)
+		return ret;
+#endif
+
 	*requested_port = port;
-	return (0);
+	return 0;
 }
 
 static int
@@ -1149,8 +1142,7 @@ wg_send(struct wg_softc *sc, struct wg_endpoint *e, struct mbuf *m)
 }
 
 static void
-wg_send_buf(struct wg_softc *sc, struct wg_endpoint *e, uint8_t *buf,
-    size_t len)
+wg_send_buf(struct wg_softc *sc, struct wg_endpoint *e, uint8_t *buf, size_t len)
 {
 	struct mbuf	*m;
 	int		 ret = 0;
