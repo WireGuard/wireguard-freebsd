@@ -1386,8 +1386,6 @@ wg_mbuf_reset(struct mbuf *m)
 	m->m_flags &= ~(M_BCAST|M_MCAST|M_VLANTAG);
 	m->m_flags &= ~(M_PROTO1|M_PROTO2|M_PROTO3|M_PROTO4|M_PROTO5|M_PROTO6|
 			M_PROTO7|M_PROTO8|M_PROTO9|M_PROTO10|M_PROTO11);
-	m->m_pkthdr.PH_per.sixtyfour[0] = 0;
-	m->m_pkthdr.PH_loc.sixtyfour[0] = 0;
 }
 
 static void
