@@ -2969,6 +2969,7 @@ wg_up(struct wg_softc *sc)
 		if_link_state_change(sc->sc_ifp, LINK_STATE_UP);
 	} else {
 		ifp->if_drv_flags &= ~IFF_DRV_RUNNING;
+		DPRINTF(sc, "Unable to initialize sockets: %d\n", rc);
 	}
 out:
 	sx_xunlock(&sc->sc_lock);
