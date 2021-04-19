@@ -129,7 +129,6 @@ static void	noise_remote_index_insert(struct noise_local *, struct noise_remote 
 static int	noise_remote_index_remove(struct noise_local *, struct noise_remote *);
 static void	noise_remote_expire_current(struct noise_remote *);
 
-
 static void	noise_add_new_keypair(struct noise_local *, struct noise_remote *, struct noise_keypair *);
 static int	noise_received_with(struct noise_keypair *);
 static int	noise_begin_session(struct noise_remote *);
@@ -729,7 +728,6 @@ noise_keypair_smr_free(struct epoch_context *smr)
 	free(kp, M_NOISE);
 }
 
-
 void
 noise_keypair_put(struct noise_keypair *kp)
 {
@@ -767,8 +765,6 @@ noise_keypair_remote_arg(struct noise_keypair *kp)
 {
 	return kp->kp_remote->r_arg;
 }
-
-
 
 int
 noise_keypair_nonce_next(struct noise_keypair *kp, uint64_t *send)
@@ -890,7 +886,6 @@ noise_keypair_decrypt(struct noise_keypair *kp, uint64_t nonce, struct mbuf *m)
 
 	return (0);
 }
-
 
 /* Handshake functions */
 int
