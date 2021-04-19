@@ -297,7 +297,7 @@ struct wg_timespec64 {
 };
 
 static int wg_socket_init(struct wg_softc *, in_port_t);
-static int wg_socket_bind(struct socket *, struct socket *, in_port_t *);
+static int wg_socket_bind(struct socket **, struct socket **, in_port_t *);
 static void wg_socket_set(struct wg_softc *, struct socket *, struct socket *);
 static void wg_socket_uninit(struct wg_softc *);
 static int wg_socket_set_sockopt(struct socket *, struct socket *, int, void *, size_t);
@@ -699,7 +699,7 @@ wg_socket_init(struct wg_softc *sc, in_port_t port)
 	if (rc)
 		goto out;
 
-	rc = wg_socket_bind(so4, so6, &port);
+	rc = wg_socket_bind(&so4, &so6, &port);
 	if (!rc) {
 		sc->sc_socket.so_port = port;
 		wg_socket_set(sc, so4, so6);
@@ -786,9 +786,10 @@ wg_socket_set(struct wg_softc *sc, struct socket *new_so4, struct socket *new_so
 }
 
 static int
-wg_socket_bind(struct socket *so4, struct socket *so6, in_port_t *requested_port)
+wg_socket_bind(struct socket **in_so4, struct socket **in_so6, in_port_t *requested_port)
 {
-	int ret;
+	struct socket *so4 = *in_so4, *so6 = *in_so6;
+	int ret4 = 0, ret6 = 0;
 	in_port_t port = *requested_port;
 	struct sockaddr_in sin = {
 		.sin_len = sizeof(struct sockaddr_in),
@@ -801,27 +802,45 @@ wg_socket_bind(struct socket *so4, struct socket *so6, in_port_t *requested_port
 		.sin6_port = htons(port)
 	};
 
-	ret = sobind(so4, (struct sockaddr *)&sin, curthread);
-	if (ret)
-		return ret;
-
-	if (port == 0) {
-		struct sockaddr_in *bound_sin;
-		ret = sogetsockaddr(so4, (struct sockaddr **)&bound_sin);
-		if (ret)
-			return ret;
-		port = ntohs(bound_sin->sin_port);
-		sin6.sin6_port = bound_sin->sin_port;
-		free(bound_sin, M_SONAME);
+	if (so4) {
+		ret4 = sobind(so4, (struct sockaddr *)&sin, curthread);
+		if (ret4 && ret4 != EADDRNOTAVAIL)
+			return ret4;
+		if (!ret4 && !sin.sin_port) {
+			struct sockaddr_in *bound_sin;
+			int ret = sogetsockaddr(so4, (struct sockaddr **)&bound_sin);
+			if (ret)
+				return ret;
+			port = ntohs(bound_sin->sin_port);
+			sin6.sin6_port = bound_sin->sin_port;
+			free(bound_sin, M_SONAME);
+		}
 	}
 
-#ifdef INET6
-	ret = sobind(so6, (struct sockaddr *)&sin6, curthread);
-	if (ret)
-		return ret;
-#endif
+	if (so6) {
+		ret6 = sobind(so6, (struct sockaddr *)&sin6, curthread);
+		if (ret6 && ret6 != EADDRNOTAVAIL)
+			return ret6;
+		if (!ret6 && !sin6.sin6_port) {
+			struct sockaddr_in6 *bound_sin6;
+			int ret = sogetsockaddr(so6, (struct sockaddr **)&bound_sin6);
+			if (ret)
+				return ret;
+			port = ntohs(bound_sin6->sin6_port);
+			free(bound_sin6, M_SONAME);
+		}
+	}
 
+	if (ret4 && ret6)
+		return ret4;
 	*requested_port = port;
+	if (ret4 && !ret6 && so4) {
+		soclose(so4);
+		*in_so4 = NULL;
+	} else if (ret6 && !ret4 && so6) {
+		soclose(so6);
+		*in_so6 = NULL;
+	}
 	return 0;
 }
 
