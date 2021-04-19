@@ -200,49 +200,6 @@ static void chacha20(struct chacha20_ctx *ctx, uint8_t *out, const uint8_t *in,
 	}
 }
 
-static void chacha20_mbuf(struct chacha20_ctx *ctx, struct mbuf *m0)
-{
-	uint32_t buf[CHACHA20_BLOCK_WORDS];
-	uint8_t	*txt, *blk;
-	struct mbuf *m;
-	int len, leftover = 0;
-
-	for (m = m0; m; m = m->m_next) {
-		len = m->m_len;
-		txt = m->m_data;
-		while (len) {
-			if (leftover == 0) {
-				chacha20_block(ctx, buf);
-				blk = (uint8_t *)buf;
-				if (len >= CHACHA20_BLOCK_SIZE) {
-					xor_cpy(txt, txt, blk, CHACHA20_BLOCK_SIZE);
-					len -= CHACHA20_BLOCK_SIZE;
-					txt += CHACHA20_BLOCK_SIZE;
-				} else {
-					xor_cpy(txt, txt, blk, len);
-					leftover = CHACHA20_BLOCK_SIZE - len;
-					blk += len;
-					len = 0;
-				}
-			} else {
-				if (len >= leftover) {
-					xor_cpy(txt, txt, blk, leftover);
-					len -= leftover;
-					txt += leftover;
-					blk += leftover;
-					leftover = 0;
-				} else {
-					xor_cpy(txt, txt, blk, len);
-					leftover -= len;
-					txt += len;
-					blk += len;
-					len = 0;
-				}
-			}
-		}
-	}
-}
-
 static void hchacha20(uint32_t derived_key[CHACHA20_KEY_WORDS],
 		      const uint8_t nonce[HCHACHA20_NONCE_SIZE],
 		      const uint8_t key[HCHACHA20_KEY_SIZE])
@@ -630,27 +587,65 @@ chacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
 	return ret;
 }
 
-bool
-chacha20poly1305_encrypt_mbuf(struct mbuf *m0, const uint64_t nonce,
-			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
+static bool
+chacha20poly1305_crypt_mbuf(struct mbuf *m0, uint64_t nonce,
+			    const uint8_t key[CHACHA20POLY1305_KEY_SIZE], bool encrypt)
 {
 	struct poly1305_ctx poly1305_state;
 	struct chacha20_ctx chacha20_state;
+	uint8_t *buf, mbuf_mac[POLY1305_MAC_SIZE];
+	size_t len, leftover = 0;
 	struct mbuf *m;
 	bool ret;
 	union {
+		uint32_t stream[CHACHA20_BLOCK_WORDS];
 		uint8_t block0[POLY1305_KEY_SIZE];
 		uint8_t mac[POLY1305_MAC_SIZE];
 		uint64_t lens[2];
 	} b = { { 0 } };
 
+	if (!encrypt) {
+		if (m0->m_pkthdr.len < POLY1305_MAC_SIZE)
+			return false;
+		m_copydata(m0, m0->m_pkthdr.len - POLY1305_MAC_SIZE, POLY1305_MAC_SIZE, mbuf_mac);
+		m_adj(m0, -POLY1305_MAC_SIZE);
+	}
+
 	chacha20_init(&chacha20_state, key, nonce);
 	chacha20(&chacha20_state, b.block0, b.block0, sizeof(b.block0));
 	poly1305_init(&poly1305_state, b.block0);
 
-	chacha20_mbuf(&chacha20_state, m0);
-	for (m = m0; m; m = m->m_next)
-		poly1305_update(&poly1305_state, m->m_data, m->m_len);
+	for (m = m0; m; m = m->m_next) {
+		len = m->m_len;
+		buf = m->m_data;
+
+		if (!encrypt)
+			poly1305_update(&poly1305_state, m->m_data, m->m_len);
+
+		if (leftover != 0) {
+			size_t l = min(len, leftover);
+			xor_cpy(buf, buf, ((uint8_t *)b.stream) + (CHACHA20_BLOCK_SIZE - leftover), l);
+			leftover -= l;
+			buf += l;
+			len -= l;
+		}
+
+		while (len >= CHACHA20_BLOCK_SIZE) {
+			chacha20_block(&chacha20_state, b.stream);
+			xor_cpy(buf, buf, (uint8_t *)b.stream, CHACHA20_BLOCK_SIZE);
+			buf += CHACHA20_BLOCK_SIZE;
+			len -= CHACHA20_BLOCK_SIZE;
+		}
+
+		if (len) {
+			chacha20_block(&chacha20_state, b.stream);
+			xor_cpy(buf, buf, (uint8_t *)b.stream, len);
+			leftover = CHACHA20_BLOCK_SIZE - len;
+		}
+
+		if (encrypt)
+			poly1305_update(&poly1305_state, m->m_data, m->m_len);
+	}
 	poly1305_update(&poly1305_state, pad0, (0x10 - m0->m_pkthdr.len) & 0xf);
 
 	b.lens[0] = 0;
@@ -658,59 +653,30 @@ chacha20poly1305_encrypt_mbuf(struct mbuf *m0, const uint64_t nonce,
 	poly1305_update(&poly1305_state, (uint8_t *)b.lens, sizeof(b.lens));
 
 	poly1305_final(&poly1305_state, b.mac);
-	ret = m_append(m0, POLY1305_MAC_SIZE, b.mac);
+
+	if (encrypt)
+		ret = m_append(m0, POLY1305_MAC_SIZE, b.mac);
+	else
+		ret = timingsafe_bcmp(b.mac, mbuf_mac, POLY1305_MAC_SIZE) == 0;
 
 	explicit_bzero(&chacha20_state, sizeof(chacha20_state));
 	explicit_bzero(&b, sizeof(b));
+
 	return ret;
 }
 
 bool
-chacha20poly1305_decrypt_mbuf(struct mbuf *m0, const uint64_t nonce,
+chacha20poly1305_encrypt_mbuf(struct mbuf *m, const uint64_t nonce,
 			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
 {
-	struct poly1305_ctx poly1305_state;
-	struct chacha20_ctx chacha20_state;
-	uint8_t mbuf_mac[POLY1305_MAC_SIZE];
-	struct mbuf *m;
-	bool ret;
-	size_t dst_len;
-	union {
-		uint8_t block0[POLY1305_KEY_SIZE];
-		uint8_t mac[POLY1305_MAC_SIZE];
-		uint64_t lens[2];
-	} b = { { 0 } };
+	return chacha20poly1305_crypt_mbuf(m, nonce, key, true);
+}
 
-	if (m0->m_pkthdr.len < POLY1305_MAC_SIZE)
-		return false;
-
-	chacha20_init(&chacha20_state, key, nonce);
-	chacha20(&chacha20_state, b.block0, b.block0, sizeof(b.block0));
-	poly1305_init(&poly1305_state, b.block0);
-
-	dst_len = m0->m_pkthdr.len - POLY1305_MAC_SIZE;
-	m_copydata(m0, dst_len, POLY1305_MAC_SIZE, mbuf_mac);
-	m_adj(m0, -POLY1305_MAC_SIZE);
-
-	for (m = m0; m; m = m->m_next)
-		poly1305_update(&poly1305_state, m->m_data, m->m_len);
-
-	poly1305_update(&poly1305_state, pad0, (0x10 - m0->m_pkthdr.len) & 0xf);
-
-	b.lens[0] = 0;
-	b.lens[1] = cpu_to_le64(dst_len);
-	poly1305_update(&poly1305_state, (uint8_t *)b.lens, sizeof(b.lens));
-
-	poly1305_final(&poly1305_state, b.mac);
-
-	ret = timingsafe_bcmp(b.mac, mbuf_mac, POLY1305_MAC_SIZE) == 0;
-	if (ret)
-		chacha20_mbuf(&chacha20_state, m0);
-
-	explicit_bzero(&chacha20_state, sizeof(chacha20_state));
-	explicit_bzero(&b, sizeof(b));
-
-	return ret;
+bool
+chacha20poly1305_decrypt_mbuf(struct mbuf *m, const uint64_t nonce,
+			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
+{
+	return chacha20poly1305_crypt_mbuf(m, nonce, key, false);
 }
 
 void
