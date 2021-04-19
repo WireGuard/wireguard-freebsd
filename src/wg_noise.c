@@ -610,16 +610,11 @@ noise_add_new_keypair(struct noise_local *l, struct noise_remote *r,
 static int
 noise_received_with(struct noise_keypair *kp)
 {
-	struct epoch_tracker et;
 	struct noise_keypair *old;
 	struct noise_remote *r = kp->kp_remote;
 
-	NET_EPOCH_ENTER(et);
-	if (kp != epoch_ptr_read(&r->r_next)) {
-		NET_EPOCH_EXIT(et);
+	if (kp != epoch_ptr_read(&r->r_next))
 		return (0);
-	}
-	NET_EPOCH_EXIT(et);
 
 	rw_wlock(&r->r_keypair_lock);
 	if (kp != epoch_ptr_read(&r->r_next)) {
