@@ -380,13 +380,19 @@ noise_remote_index_lookup(struct noise_local *l, uint32_t idx0)
 {
 	struct epoch_tracker et;
 	struct noise_index *i;
+	struct noise_keypair *kp;
 	struct noise_remote *r, *ret = NULL;
 	uint32_t idx = idx0 & HT_INDEX_MASK;
 
 	NET_EPOCH_ENTER(et);
 	CK_LIST_FOREACH(i, &l->l_index_hash[idx], i_entry) {
-		if (i->i_local_index == idx0 && !i->i_is_keypair) {
-			r = (struct noise_remote *) i;
+		if (i->i_local_index == idx0) {
+			if (i->i_is_keypair) {
+				kp = (struct noise_keypair *) i;
+				r = kp->kp_remote;
+			} else {
+				r = (struct noise_remote *) i;
+			}
 			if (refcount_acquire_if_not_zero(&r->r_refcnt))
 				ret = r;
 			break;

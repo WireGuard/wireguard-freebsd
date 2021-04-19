@@ -1260,7 +1260,6 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 	struct wg_endpoint		*e;
 	struct wg_peer			*peer;
 	struct mbuf			*m;
-	struct noise_keypair		*keypair;
 	struct noise_remote		*remote = NULL;
 	int				 res, underload = 0;
 	static struct timeval		 wg_last_underload; /* microuptime */
@@ -1353,12 +1352,8 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 		cook = mtod(m, struct wg_pkt_cookie *);
 
 		if ((remote = noise_remote_index_lookup(sc->sc_local, cook->r_idx)) == NULL) {
-			if ((keypair = noise_keypair_lookup(sc->sc_local, cook->r_idx)) == NULL) {
-				DPRINTF(sc, "Unknown cookie index\n");
-				goto error;
-			}
-			remote = noise_keypair_remote(keypair);
-			noise_keypair_put(keypair);
+			DPRINTF(sc, "Unknown cookie index\n");
+			goto error;
 		}
 
 		peer = noise_remote_arg(remote);
