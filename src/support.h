@@ -57,6 +57,15 @@ MALLOC_DECLARE(M_WG);
 #define IFT_WIREGUARD IFT_PPP
 #endif
 
+#ifndef ck_pr_store_bool
+#define ck_pr_store_bool(dst, val) ck_pr_store_8((uint8_t *)(dst), (uint8_t)(val))
+#endif
+
+#ifndef ck_pr_load_bool
+#define ck_pr_load_bool(src) ((bool)ck_pr_load_8((uint8_t *)(src)))
+#endif
+
+
 static inline int
 sogetsockaddr(struct socket *so, struct sockaddr **nam)
 {
@@ -67,26 +76,5 @@ sogetsockaddr(struct socket *so, struct sockaddr **nam)
 	CURVNET_RESTORE();
 	return (error);
 }
-
-/* These are defined in sys/compat/linuxkpi/common/include/linux/compiler.h,
- * however I don't really want to include all that. */
-#define barrier()                       __asm__ __volatile__("": : :"memory")
-
-#define ACCESS_ONCE(x)                  (*(volatile __typeof(x) *)&(x))
-
-#define WRITE_ONCE(x,v) do {            \
-        barrier();                      \
-        ACCESS_ONCE(x) = (v);           \
-        barrier();                      \
-} while (0)
-
-#define READ_ONCE(x) ({                 \
-        __typeof(x) __var = ({          \
-                barrier();              \
-                ACCESS_ONCE(x);         \
-        });                             \
-        barrier();                      \
-        __var;                          \
-})
 
 #endif

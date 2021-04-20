@@ -13,7 +13,6 @@
 - Run ratelimiter gc in a properly scheduled manner.
 - Make sure noise state machine is correct.
 - Clear mbuf tags and other members properly.
-- Switch `WRITE_ONCE` and `epoch_ptr_*` functions to use the actual helper from `ck_`.
 
 ### Crypto TODO
 

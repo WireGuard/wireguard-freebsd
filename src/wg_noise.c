@@ -165,11 +165,6 @@ static void	noise_tai64n_now(uint8_t [NOISE_TIMESTAMP_LEN]);
 static int	noise_timer_expired(sbintime_t, uint32_t, uint32_t);
 static uint64_t siphash24(const uint8_t [SIPHASH_KEY_LENGTH], const void *, size_t);
 
-/* I can't find where FreeBSD defines such behaviours, so that is temporarily here. */
-#define epoch_ptr_read(p) ck_pr_load_ptr(p)
-#define epoch_ptr_write(p, v) ck_pr_store_ptr(p, v)
-/* Back to regular programming... */
-
 MALLOC_DEFINE(M_NOISE, "NOISE", "wgnoise");
 
 /* Local configuration */
@@ -565,16 +560,16 @@ noise_remote_keypairs_clear(struct noise_remote *r)
 	struct noise_keypair *kp;
 
 	rw_wlock(&r->r_keypair_lock);
-	kp = epoch_ptr_read(&r->r_next);
-	epoch_ptr_write(&r->r_next, NULL);
+	kp = ck_pr_load_ptr(&r->r_next);
+	ck_pr_store_ptr(&r->r_next, NULL);
 	noise_keypair_drop(kp);
 
-	kp = epoch_ptr_read(&r->r_current);
-	epoch_ptr_write(&r->r_current, NULL);
+	kp = ck_pr_load_ptr(&r->r_current);
+	ck_pr_store_ptr(&r->r_current, NULL);
 	noise_keypair_drop(kp);
 
-	kp = epoch_ptr_read(&r->r_previous);
-	epoch_ptr_write(&r->r_previous, NULL);
+	kp = ck_pr_load_ptr(&r->r_previous);
+	ck_pr_store_ptr(&r->r_previous, NULL);
 	noise_keypair_drop(kp);
 	rw_wunlock(&r->r_keypair_lock);
 }
@@ -588,10 +583,12 @@ noise_remote_expire_current(struct noise_remote *r)
 	noise_remote_handshake_clear(r);
 
 	NET_EPOCH_ENTER(et);
-	kp = epoch_ptr_read(&r->r_next);
-	if (kp != NULL) WRITE_ONCE(kp->kp_can_send, 0);
-	kp = epoch_ptr_read(&r->r_current);
-	if (kp != NULL) WRITE_ONCE(kp->kp_can_send, 0);
+	kp = ck_pr_load_ptr(&r->r_next);
+	if (kp != NULL)
+		ck_pr_store_bool(&kp->kp_can_send, false);
+	kp = ck_pr_load_ptr(&r->r_current);
+	if (kp != NULL)
+		ck_pr_store_bool(&kp->kp_can_send, false);
 	NET_EPOCH_EXIT(et);
 }
 
@@ -605,24 +602,24 @@ noise_add_new_keypair(struct noise_local *l, struct noise_remote *r,
 
 	/* Insert into the keypair table */
 	rw_wlock(&r->r_keypair_lock);
-	next = epoch_ptr_read(&r->r_next);
-	current = epoch_ptr_read(&r->r_current);
-	previous = epoch_ptr_read(&r->r_previous);
+	next = ck_pr_load_ptr(&r->r_next);
+	current = ck_pr_load_ptr(&r->r_current);
+	previous = ck_pr_load_ptr(&r->r_previous);
 
 	if (kp->kp_is_initiator) {
 		if (next != NULL) {
-			epoch_ptr_write(&r->r_next, NULL);
-			epoch_ptr_write(&r->r_previous, next);
+			ck_pr_store_ptr(&r->r_next, NULL);
+			ck_pr_store_ptr(&r->r_previous, next);
 			noise_keypair_drop(current);
 		} else {
-			epoch_ptr_write(&r->r_previous, current);
+			ck_pr_store_ptr(&r->r_previous, current);
 		}
 		noise_keypair_drop(previous);
-		epoch_ptr_write(&r->r_current, kp);
+		ck_pr_store_ptr(&r->r_current, kp);
 	} else {
-		epoch_ptr_write(&r->r_next, kp);
+		ck_pr_store_ptr(&r->r_next, kp);
 		noise_keypair_drop(next);
-		epoch_ptr_write(&r->r_previous, NULL);
+		ck_pr_store_ptr(&r->r_previous, NULL);
 		noise_keypair_drop(previous);
 
 	}
@@ -706,10 +703,10 @@ noise_keypair_current(struct noise_remote *r)
 	struct noise_keypair *kp, *ret = NULL;
 
 	NET_EPOCH_ENTER(et);
-	kp = epoch_ptr_read(&r->r_current);
-	if (kp != NULL && READ_ONCE(kp->kp_can_send)) {
+	kp = ck_pr_load_ptr(&r->r_current);
+	if (kp != NULL && ck_pr_load_bool(&kp->kp_can_send)) {
 		if (noise_timer_expired(kp->kp_birthdate, REJECT_AFTER_TIME, 0))
-			WRITE_ONCE(kp->kp_can_send, 0);
+			ck_pr_store_bool(&kp->kp_can_send, false);
 		else if (refcount_acquire_if_not_zero(&kp->kp_refcnt))
 			ret = kp;
 	}
@@ -730,20 +727,20 @@ noise_keypair_received_with(struct noise_keypair *kp)
 	struct noise_keypair *old;
 	struct noise_remote *r = kp->kp_remote;
 
-	if (kp != epoch_ptr_read(&r->r_next))
+	if (kp != ck_pr_load_ptr(&r->r_next))
 		return (0);
 
 	rw_wlock(&r->r_keypair_lock);
-	if (kp != epoch_ptr_read(&r->r_next)) {
+	if (kp != ck_pr_load_ptr(&r->r_next)) {
 		rw_wunlock(&r->r_keypair_lock);
 		return (0);
 	}
 
-	old = epoch_ptr_read(&r->r_previous);
-	epoch_ptr_write(&r->r_previous, epoch_ptr_read(&r->r_current));
+	old = ck_pr_load_ptr(&r->r_previous);
+	ck_pr_store_ptr(&r->r_previous, ck_pr_load_ptr(&r->r_current));
 	noise_keypair_drop(old);
-	epoch_ptr_write(&r->r_current, kp);
-	epoch_ptr_write(&r->r_next, NULL);
+	ck_pr_store_ptr(&r->r_current, kp);
+	ck_pr_store_ptr(&r->r_next, NULL);
 	rw_wunlock(&r->r_keypair_lock);
 
 	return (ECONNRESET);
@@ -809,7 +806,7 @@ noise_keypair_nonce_next(struct noise_keypair *kp, uint64_t *send)
 #endif
 	if (*send < REJECT_AFTER_MESSAGES)
 		return (0);
-	WRITE_ONCE(kp->kp_can_send, 0);
+	ck_pr_store_bool(&kp->kp_can_send, false);
 	return (EINVAL);
 }
 
@@ -841,7 +838,7 @@ noise_keypair_nonce_check(struct noise_keypair *kp, uint64_t recv)
 		for (i = 1; i <= top; i++)
 			kp->kp_backtrack[
 			    (i + index_ctr) & (COUNTER_NUM - 1)] = 0;
-		WRITE_ONCE(kp->kp_nonce_recv, recv);
+		ck_pr_store_64(&kp->kp_nonce_recv, recv);
 	}
 
 	index_recv %= COUNTER_NUM;
@@ -866,9 +863,9 @@ noise_keep_key_fresh_send(struct noise_remote *r)
 	int keep_key_fresh;
 
 	NET_EPOCH_ENTER(et);
-	current = epoch_ptr_read(&r->r_current);
-	keep_key_fresh = current != NULL && READ_ONCE(current->kp_can_send) && (
-	    READ_ONCE(current->kp_nonce_send) > REKEY_AFTER_MESSAGES ||
+	current = ck_pr_load_ptr(&r->r_current);
+	keep_key_fresh = current != NULL && ck_pr_load_bool(&current->kp_can_send) && (
+	    ck_pr_load_64(&current->kp_nonce_send) > REKEY_AFTER_MESSAGES ||
 	    (current->kp_is_initiator && noise_timer_expired(current->kp_birthdate, REKEY_AFTER_TIME, 0)));
 	NET_EPOCH_EXIT(et);
 
@@ -883,8 +880,8 @@ noise_keep_key_fresh_recv(struct noise_remote *r)
 	int keep_key_fresh;
 
 	NET_EPOCH_ENTER(et);
-	current = epoch_ptr_read(&r->r_current);
-	keep_key_fresh = current != NULL && READ_ONCE(current->kp_can_send) &&
+	current = ck_pr_load_ptr(&r->r_current);
+	keep_key_fresh = current != NULL && ck_pr_load_bool(&current->kp_can_send) &&
 	    current->kp_is_initiator && noise_timer_expired(current->kp_birthdate,
 			REJECT_AFTER_TIME - KEEPALIVE_TIMEOUT - REKEY_TIMEOUT, 0);
 	NET_EPOCH_EXIT(et);
@@ -905,7 +902,7 @@ noise_keypair_encrypt(struct noise_keypair *kp, uint32_t *r_idx, uint64_t nonce,
 int
 noise_keypair_decrypt(struct noise_keypair *kp, uint64_t nonce, struct mbuf *m)
 {
-	if (READ_ONCE(kp->kp_nonce_recv) >= REJECT_AFTER_MESSAGES ||
+	if (ck_pr_load_64(&kp->kp_nonce_recv) >= REJECT_AFTER_MESSAGES ||
 	    noise_timer_expired(kp->kp_birthdate, REJECT_AFTER_TIME, 0))
 		return (EINVAL);
 

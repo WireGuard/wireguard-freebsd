@@ -778,10 +778,10 @@ wg_socket_set(struct wg_softc *sc, struct socket *new_so4, struct socket *new_so
 
 	sx_assert(&sc->sc_lock, SX_XLOCKED);
 
-	so4 = atomic_load_ptr(&so->so_so4);
-	so6 = atomic_load_ptr(&so->so_so6);
-	atomic_store_ptr(&so->so_so4, new_so4);
-	atomic_store_ptr(&so->so_so6, new_so6);
+	so4 = ck_pr_load_ptr(&so->so_so4);
+	so6 = ck_pr_load_ptr(&so->so_so6);
+	ck_pr_store_ptr(&so->so_so4, new_so4);
+	ck_pr_store_ptr(&so->so_so6, new_so6);
 
 	if (!so4 && !so6)
 		return;
@@ -884,8 +884,8 @@ wg_send(struct wg_softc *sc, struct wg_endpoint *e, struct mbuf *m)
 	sa = &e->e_remote.r_sa;
 
 	NET_EPOCH_ENTER(et);
-	so4 = atomic_load_ptr(&so->so_so4);
-	so6 = atomic_load_ptr(&so->so_so6);
+	so4 = ck_pr_load_ptr(&so->so_so4);
+	so6 = ck_pr_load_ptr(&so->so_so6);
 	if (e->e_remote.r_sa.sa_family == AF_INET && so4 != NULL)
 		ret = sosend(so4, sa, NULL, m, control, 0, curthread);
 	else if (e->e_remote.r_sa.sa_family == AF_INET6 && so6 != NULL)
@@ -932,16 +932,16 @@ retry:
 static void
 wg_timers_enable(struct wg_peer *peer)
 {
-	WRITE_ONCE(peer->p_enabled, true);
+	ck_pr_store_bool(&peer->p_enabled, true);
 	wg_timers_run_persistent_keepalive(peer);
 }
 
 static void
 wg_timers_disable(struct wg_peer *peer)
 {
-	WRITE_ONCE(peer->p_enabled, false);
+	ck_pr_store_bool(&peer->p_enabled, false);
 	NET_EPOCH_WAIT();
-	WRITE_ONCE(peer->p_need_another_keepalive, false);
+	ck_pr_store_bool(&peer->p_need_another_keepalive, false);
 
 	callout_stop(&peer->p_new_handshake);
 	callout_stop(&peer->p_send_keepalive);
@@ -955,9 +955,9 @@ wg_timers_set_persistent_keepalive(struct wg_peer *peer, uint16_t interval)
 {
 	struct epoch_tracker et;
 	if (interval != peer->p_persistent_keepalive_interval) {
-		WRITE_ONCE(peer->p_persistent_keepalive_interval, interval);
+		ck_pr_store_16(&peer->p_persistent_keepalive_interval, interval);
 		NET_EPOCH_ENTER(et);
-		if (peer->p_enabled)
+		if (ck_pr_load_bool(&peer->p_enabled))
 			wg_timers_run_persistent_keepalive(peer);
 		NET_EPOCH_EXIT(et);
 	}
@@ -977,7 +977,7 @@ wg_timers_event_data_sent(struct wg_peer *peer)
 {
 	struct epoch_tracker et;
 	NET_EPOCH_ENTER(et);
-	if (peer->p_enabled && !callout_pending(&peer->p_new_handshake))
+	if (ck_pr_load_bool(&peer->p_enabled) && !callout_pending(&peer->p_new_handshake))
 		callout_reset(&peer->p_new_handshake, MSEC_2_TICKS(
 		    NEW_HANDSHAKE_TIMEOUT * 1000 +
 		    arc4random_uniform(REKEY_TIMEOUT_JITTER)),
@@ -990,13 +990,13 @@ wg_timers_event_data_received(struct wg_peer *peer)
 {
 	struct epoch_tracker et;
 	NET_EPOCH_ENTER(et);
-	if (peer->p_enabled) {
+	if (ck_pr_load_bool(&peer->p_enabled)) {
 		if (!callout_pending(&peer->p_send_keepalive))
 			callout_reset(&peer->p_send_keepalive,
 			    MSEC_2_TICKS(KEEPALIVE_TIMEOUT * 1000),
 			    wg_timers_run_send_keepalive, peer);
 		else
-			WRITE_ONCE(peer->p_need_another_keepalive, true);
+			ck_pr_store_bool(&peer->p_need_another_keepalive, true);
 	}
 	NET_EPOCH_EXIT(et);
 }
@@ -1019,8 +1019,8 @@ wg_timers_event_any_authenticated_packet_traversal(struct wg_peer *peer)
 	struct epoch_tracker et;
 	uint16_t interval;
 	NET_EPOCH_ENTER(et);
-	interval = READ_ONCE(peer->p_persistent_keepalive_interval);
-	if (peer->p_enabled && interval > 0)
+	interval = ck_pr_load_16(&peer->p_persistent_keepalive_interval);
+	if (ck_pr_load_bool(&peer->p_enabled) && interval > 0)
 		callout_reset(&peer->p_persistent_keepalive,
 		     MSEC_2_TICKS(interval * 1000),
 		     wg_timers_run_persistent_keepalive, peer);
@@ -1032,7 +1032,7 @@ wg_timers_event_handshake_initiated(struct wg_peer *peer)
 {
 	struct epoch_tracker et;
 	NET_EPOCH_ENTER(et);
-	if (peer->p_enabled)
+	if (ck_pr_load_bool(&peer->p_enabled))
 		callout_reset(&peer->p_retry_handshake, MSEC_2_TICKS(
 		    REKEY_TIMEOUT * 1000 +
 		    arc4random_uniform(REKEY_TIMEOUT_JITTER)),
@@ -1045,7 +1045,7 @@ wg_timers_event_handshake_complete(struct wg_peer *peer)
 {
 	struct epoch_tracker et;
 	NET_EPOCH_ENTER(et);
-	if (peer->p_enabled) {
+	if (ck_pr_load_bool(&peer->p_enabled)) {
 		mtx_lock(&peer->p_handshake_mtx);
 		callout_stop(&peer->p_retry_handshake);
 		peer->p_handshake_retries = 0;
@@ -1061,7 +1061,7 @@ wg_timers_event_session_derived(struct wg_peer *peer)
 {
 	struct epoch_tracker et;
 	NET_EPOCH_ENTER(et);
-	if (peer->p_enabled)
+	if (ck_pr_load_bool(&peer->p_enabled))
 		callout_reset(&peer->p_zero_key_material,
 		    MSEC_2_TICKS(REJECT_AFTER_TIME * 3 * 1000),
 		    wg_timers_run_zero_key_material, peer);
@@ -1073,7 +1073,7 @@ wg_timers_event_want_initiation(struct wg_peer *peer)
 {
 	struct epoch_tracker et;
 	NET_EPOCH_ENTER(et);
-	if (peer->p_enabled)
+	if (ck_pr_load_bool(&peer->p_enabled))
 		wg_timers_run_send_initiation(peer, 0);
 	NET_EPOCH_EXIT(et);
 }
@@ -1124,8 +1124,8 @@ wg_timers_run_send_keepalive(void *_peer)
 	struct wg_peer *peer = _peer;
 
 	wg_send_keepalive(peer);
-	if (READ_ONCE(peer->p_need_another_keepalive)) {
-		WRITE_ONCE(peer->p_need_another_keepalive, false);
+	if (ck_pr_load_bool(&peer->p_need_another_keepalive)) {
+		ck_pr_store_bool(&peer->p_need_another_keepalive, false);
 		callout_reset(&peer->p_send_keepalive,
 		    MSEC_2_TICKS(KEEPALIVE_TIMEOUT * 1000),
 		    wg_timers_run_send_keepalive, peer);
@@ -1161,7 +1161,7 @@ wg_timers_run_persistent_keepalive(void *_peer)
 {
 	struct wg_peer *peer = _peer;
 
-	if (READ_ONCE(peer->p_persistent_keepalive_interval) > 0)
+	if (ck_pr_load_16(&peer->p_persistent_keepalive_interval) > 0)
 		wg_send_keepalive(peer);
 }
 
