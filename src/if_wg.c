@@ -1463,7 +1463,6 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 
 	peer = noise_keypair_remote_arg(pkt->p_keypair);
 	m = pkt->p_mbuf;
-	len = m->m_pkthdr.len;
 
 	/* Read index, nonce and then adjust to remove the header. */
 	memcpy(&data, mtod(m, void *), sizeof(struct wg_pkt_data));
