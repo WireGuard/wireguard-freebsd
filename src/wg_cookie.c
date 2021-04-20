@@ -110,7 +110,7 @@ cookie_maker_consume_payload(struct cookie_maker *cp,
 
 	rw_enter_write(&cp->cp_lock);
 
-	if (cp->cp_mac1_valid == 0) {
+	if (!cp->cp_mac1_valid) {
 		ret = ETIMEDOUT;
 		goto error;
 	}
@@ -123,7 +123,7 @@ cookie_maker_consume_payload(struct cookie_maker *cp,
 
 	memcpy(cp->cp_cookie, cookie, COOKIE_COOKIE_SIZE);
 	getnanouptime(&cp->cp_birthdate);
-	cp->cp_mac1_valid = 0;
+	cp->cp_mac1_valid = false;
 
 error:
 	rw_exit_write(&cp->cp_lock);
@@ -139,7 +139,7 @@ cookie_maker_mac(struct cookie_maker *cp, struct cookie_macs *cm, void *buf,
 	cookie_macs_mac1(cm, buf, len, cp->cp_mac1_key);
 
 	memcpy(cp->cp_mac1_last, cm->mac1, COOKIE_MAC_SIZE);
-	cp->cp_mac1_valid = 1;
+	cp->cp_mac1_valid = true;
 
 	if (!cookie_timer_expired(&cp->cp_birthdate,
 	    COOKIE_SECRET_MAX_AGE - COOKIE_SECRET_LATENCY, 0))

@@ -77,7 +77,7 @@ struct cookie_maker {
 	struct rwlock	cp_lock;
 	uint8_t		cp_cookie[COOKIE_COOKIE_SIZE];
 	struct timespec	cp_birthdate;	/* nanouptime */
-	int		cp_mac1_valid;
+	bool		cp_mac1_valid;
 	uint8_t		cp_mac1_last[COOKIE_MAC_SIZE];
 };
 

@@ -198,8 +198,8 @@ struct wg_peer {
 	struct wg_queue	 		 p_encrypt_serial;
 	struct wg_queue	 		 p_decrypt_serial;
 
-	int				 p_enabled;
-	int				 p_need_another_keepalive;
+	bool				 p_enabled;
+	bool				 p_need_another_keepalive;
 	uint16_t			 p_persistent_keepalive_interval;
 	struct callout			 p_new_handshake;
 	struct callout			 p_send_keepalive;
@@ -410,8 +410,8 @@ wg_peer_alloc(struct wg_softc *sc, const uint8_t pub_key[WG_KEY_SIZE])
 	wg_queue_init(&peer->p_encrypt_serial, "txq");
 	wg_queue_init(&peer->p_decrypt_serial, "rxq");
 
-	peer->p_enabled = 0;
-	peer->p_need_another_keepalive = 0;
+	peer->p_enabled = false;
+	peer->p_need_another_keepalive = false;
 	peer->p_persistent_keepalive_interval = 0;
 
 	callout_init(&peer->p_new_handshake, true);
@@ -519,7 +519,8 @@ wg_aip_add(struct wg_softc *sc, struct wg_peer *peer, sa_family_t af, const void
 	struct wg_aip		*aip;
 	struct sockaddr_in	*sin_addr, *sin_mask;
 	struct sockaddr_in6	*sin6_addr, *sin6_mask;
-	int			 i, need_free = 0, ret = 0;
+	bool			 need_free = false;
+	int			 i, ret = 0;
 
 	if ((aip = malloc(sizeof(*aip), M_WG, M_NOWAIT | M_ZERO)) == NULL)
 		return (ENOBUFS);
@@ -572,7 +573,7 @@ wg_aip_add(struct wg_softc *sc, struct wg_peer *peer, sa_family_t af, const void
 		LIST_INSERT_HEAD(&peer->p_aips, aip, a_entry);
 		peer->p_aips_num++;
 	} else {
-		need_free = 1;
+		need_free = true;
 		aip = (struct wg_aip *) node;
 		if (aip->a_peer != peer) {
 			LIST_REMOVE(aip, a_entry);
@@ -930,16 +931,16 @@ retry:
 static void
 wg_timers_enable(struct wg_peer *peer)
 {
-	WRITE_ONCE(peer->p_enabled, 1);
+	WRITE_ONCE(peer->p_enabled, true);
 	wg_timers_run_persistent_keepalive(peer);
 }
 
 static void
 wg_timers_disable(struct wg_peer *peer)
 {
-	WRITE_ONCE(peer->p_enabled, 0);
+	WRITE_ONCE(peer->p_enabled, false);
 	NET_EPOCH_WAIT();
-	WRITE_ONCE(peer->p_need_another_keepalive, 0);
+	WRITE_ONCE(peer->p_need_another_keepalive, false);
 
 	callout_stop(&peer->p_new_handshake);
 	callout_stop(&peer->p_send_keepalive);
@@ -994,7 +995,7 @@ wg_timers_event_data_received(struct wg_peer *peer)
 			    MSEC_2_TICKS(KEEPALIVE_TIMEOUT * 1000),
 			    wg_timers_run_send_keepalive, peer);
 		else
-			WRITE_ONCE(peer->p_need_another_keepalive, 1);
+			WRITE_ONCE(peer->p_need_another_keepalive, true);
 	}
 	NET_EPOCH_EXIT(et);
 }
@@ -1123,7 +1124,7 @@ wg_timers_run_send_keepalive(void *_peer)
 
 	wg_send_keepalive(peer);
 	if (READ_ONCE(peer->p_need_another_keepalive)) {
-		WRITE_ONCE(peer->p_need_another_keepalive, 0);
+		WRITE_ONCE(peer->p_need_another_keepalive, false);
 		callout_reset(&peer->p_send_keepalive,
 		    MSEC_2_TICKS(KEEPALIVE_TIMEOUT * 1000),
 		    wg_timers_run_send_keepalive, peer);
@@ -1266,16 +1267,17 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 	struct wg_peer			*peer;
 	struct mbuf			*m;
 	struct noise_remote		*remote = NULL;
-	int				 res, underload = 0;
+	int				 res;
+	bool				 underload = false;
 	static struct timeval		 wg_last_underload; /* microuptime */
 	static const struct timeval	 underload_interval = { UNDERLOAD_TIMEOUT, 0 };
 
 	if (wg_queue_len(&sc->sc_handshake_queue) >= MAX_QUEUED_HANDSHAKES/8) {
 		getmicrouptime(&wg_last_underload);
-		underload = 1;
+		underload = true;
 	} else if (wg_last_underload.tv_sec != 0) {
 		if (!ratecheck(&wg_last_underload, &underload_interval))
-			underload = 1;
+			underload = true;
 		else
 			bzero(&wg_last_underload, sizeof(wg_last_underload));
 	}
@@ -1574,7 +1576,8 @@ wg_deliver_out(struct wg_peer *peer)
 	struct wg_softc		*sc = peer->p_sc;
 	struct wg_packet	*pkt;
 	struct mbuf		*m;
-	int			 rc, len, data_sent = 0;
+	int			 rc, len;
+	bool			 data_sent = false;
 
 	wg_peer_get_endpoint(peer, &endpoint);
 
@@ -1590,7 +1593,7 @@ wg_deliver_out(struct wg_peer *peer)
 				wg_timers_event_any_authenticated_packet_traversal(peer);
 				wg_timers_event_any_authenticated_packet_sent(peer);
 				if (len > (sizeof(struct wg_pkt_data)+NOISE_AUTHTAG_LEN))
-					data_sent = 1;
+					data_sent = true;
 				counter_u64_add(peer->p_tx_bytes, len);
 			} else if (rc == EADDRNOTAVAIL) {
 				wg_peer_clear_src(peer);
@@ -1620,7 +1623,7 @@ wg_deliver_in(struct wg_peer *peer)
 	struct wg_packet	*pkt;
 	struct mbuf		*m;
 	uint32_t		 af;
-	int			 data_recv = 0;
+	bool			 data_recv = false;
 
 	while ((pkt = wg_queue_dequeue_serial(&peer->p_decrypt_serial)) != NULL) {
 		if (pkt->p_state == WG_PACKET_CRYPTED) {
@@ -1646,7 +1649,7 @@ wg_deliver_in(struct wg_peer *peer)
 
 			MPASS(pkt->p_af == AF_INET || pkt->p_af == AF_INET6);
 			pkt->p_mbuf = NULL;
-			data_recv = 1;
+			data_recv = true;
 
 			m->m_flags &= ~(M_MCAST | M_BCAST);
 			m->m_pkthdr.rcvif = ifp;
