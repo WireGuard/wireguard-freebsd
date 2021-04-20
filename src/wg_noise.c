@@ -81,6 +81,7 @@ struct noise_remote {
 	struct noise_index		 r_index;
 
 	CK_LIST_ENTRY(noise_remote) 	 r_entry;
+	int				 r_entry_valid;
 	uint8_t				 r_public[NOISE_PUBLIC_KEY_LEN];
 
 	struct rwlock			 r_handshake_lock;
@@ -277,16 +278,15 @@ noise_precompute_ss(struct noise_local *l, struct noise_remote *r)
 /* Remote configuration */
 struct noise_remote *
 noise_remote_alloc(struct noise_local *l, void *arg,
-    const uint8_t public[NOISE_PUBLIC_KEY_LEN],
-    const uint8_t psk[NOISE_PUBLIC_KEY_LEN])
+    const uint8_t public[NOISE_PUBLIC_KEY_LEN])
 {
 	struct noise_remote *r;
-	uint64_t idx;
 
 	if ((r = malloc(sizeof(*r), M_NOISE, M_NOWAIT)) == NULL)
 		return (NULL);
 
 	r->r_index.i_is_keypair = 0;
+	r->r_entry_valid = 0;
 
 	memcpy(r->r_public, public, NOISE_PUBLIC_KEY_LEN);
 
@@ -297,7 +297,7 @@ noise_remote_alloc(struct noise_local *l, void *arg,
 	r->r_last_sent = TIMER_RESET;
 	r->r_last_init_recv = TIMER_RESET;
 	bzero(r->r_timestamp, NOISE_TIMESTAMP_LEN);
-	noise_remote_set_psk(r, psk);
+	bzero(r->r_psk, sizeof(r->r_psk));
 	noise_precompute_ss(l, r);
 
 	refcount_init(&r->r_refcnt, 1);
@@ -309,21 +309,39 @@ noise_remote_alloc(struct noise_local *l, void *arg,
 
 	bzero(&r->r_smr, sizeof(r->r_smr));
 
+	return (r);
+}
+
+void
+noise_remote_enable(struct noise_remote *r)
+{
+	struct noise_local *l = r->r_local;
+	uint64_t idx;
+
 	/* Insert to hashtable */
-	idx = siphash24(&l->l_hash_key, public, NOISE_PUBLIC_KEY_LEN) & HT_REMOTE_MASK;
+	idx = siphash24(&l->l_hash_key, r->r_public, NOISE_PUBLIC_KEY_LEN) & HT_REMOTE_MASK;
 
 	rw_wlock(&l->l_remote_lock);
-	if (l->l_remote_num < MAX_REMOTE_PER_LOCAL) {
+	if (!r->r_entry_valid && l->l_remote_num < MAX_REMOTE_PER_LOCAL) {
+		r->r_entry_valid = 1;
 		l->l_remote_num++;
 		CK_LIST_INSERT_HEAD(&l->l_remote_hash[idx], r, r_entry);
-	} else {
-		free(r, M_NOISE);
-		noise_local_put(l);
-		r = NULL;
 	}
 	rw_wunlock(&l->l_remote_lock);
+}
 
-	return (r);
+void
+noise_remote_disable(struct noise_remote *r)
+{
+	struct noise_local *l = r->r_local;
+	/* remove from hashtable */
+	rw_wlock(&l->l_remote_lock);
+	if (r->r_entry_valid) {
+		r->r_entry_valid = 1;
+		CK_LIST_REMOVE(r, r_entry);
+		l->l_remote_num--;
+	};
+	rw_wunlock(&l->l_remote_lock);
 }
 
 struct noise_remote *
@@ -449,15 +467,8 @@ noise_remote_put(struct noise_remote *r)
 void
 noise_remote_free(struct noise_remote *r, void (*cleanup)(struct noise_remote *))
 {
-	struct noise_local *l = r->r_local;
-
 	r->r_cleanup = cleanup;
-
-	/* remove from hashtable */
-	rw_wlock(&l->l_remote_lock);
-	CK_LIST_REMOVE(r, r_entry);
-	l->l_remote_num--;
-	rw_wunlock(&l->l_remote_lock);
+	noise_remote_disable(r);
 
 	/* now clear all keypairs and handshakes, then put this reference */
 	noise_remote_handshake_clear(r);

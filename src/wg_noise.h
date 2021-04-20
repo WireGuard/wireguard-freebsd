@@ -45,8 +45,9 @@ int	noise_local_keys(struct noise_local *,
 /* Remote configuration */
 struct noise_remote *
 	noise_remote_alloc(struct noise_local *, void *,
-	    const uint8_t[NOISE_PUBLIC_KEY_LEN],
-	    const uint8_t[NOISE_SYMMETRIC_KEY_LEN]);
+	    const uint8_t[NOISE_PUBLIC_KEY_LEN]);
+void	noise_remote_enable(struct noise_remote *);
+void	noise_remote_disable(struct noise_remote *);
 struct noise_remote *
 	noise_remote_lookup(struct noise_local *, const uint8_t[NOISE_PUBLIC_KEY_LEN]);
 struct noise_remote *
