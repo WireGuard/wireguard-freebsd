@@ -2152,7 +2152,8 @@ wg_peer_add(struct wg_softc *sc, const nvlist_t *nvl)
 		}
 	}
 	if (need_insert) {
-		noise_remote_enable(peer->p_remote);
+		if ((err = noise_remote_enable(peer->p_remote)) != 0)
+			goto out;
 		TAILQ_INSERT_TAIL(&sc->sc_peers, peer, p_entry);
 		sc->sc_peers_num++;
 		if (sc->sc_ifp->if_link_state == LINK_STATE_UP)

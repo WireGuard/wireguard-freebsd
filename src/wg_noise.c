@@ -81,7 +81,7 @@ struct noise_remote {
 	struct noise_index		 r_index;
 
 	CK_LIST_ENTRY(noise_remote) 	 r_entry;
-	int				 r_entry_valid;
+	int				 r_entry_inserted;
 	uint8_t				 r_public[NOISE_PUBLIC_KEY_LEN];
 
 	struct rwlock			 r_handshake_lock;
@@ -288,7 +288,7 @@ noise_remote_alloc(struct noise_local *l, void *arg,
 		return (NULL);
 
 	r->r_index.i_is_keypair = 0;
-	r->r_entry_valid = 0;
+	r->r_entry_inserted = 0;
 
 	memcpy(r->r_public, public, NOISE_PUBLIC_KEY_LEN);
 
@@ -314,22 +314,29 @@ noise_remote_alloc(struct noise_local *l, void *arg,
 	return (r);
 }
 
-void
+int
 noise_remote_enable(struct noise_remote *r)
 {
 	struct noise_local *l = r->r_local;
 	uint64_t idx;
+	int ret = 0;
 
 	/* Insert to hashtable */
 	idx = siphash24(&l->l_hash_key, r->r_public, NOISE_PUBLIC_KEY_LEN) & HT_REMOTE_MASK;
 
 	rw_wlock(&l->l_remote_lock);
-	if (!r->r_entry_valid && l->l_remote_num < MAX_REMOTE_PER_LOCAL) {
-		r->r_entry_valid = 1;
-		l->l_remote_num++;
-		CK_LIST_INSERT_HEAD(&l->l_remote_hash[idx], r, r_entry);
+	if (!r->r_entry_inserted)
+		if (l->l_remote_num < MAX_REMOTE_PER_LOCAL) {
+			r->r_entry_inserted = 1;
+			l->l_remote_num++;
+			CK_LIST_INSERT_HEAD(&l->l_remote_hash[idx], r, r_entry);
+		} else {
+			ret = ENOSPC;
+		}
 	}
 	rw_wunlock(&l->l_remote_lock);
+
+	return ret;
 }
 
 void
@@ -338,8 +345,8 @@ noise_remote_disable(struct noise_remote *r)
 	struct noise_local *l = r->r_local;
 	/* remove from hashtable */
 	rw_wlock(&l->l_remote_lock);
-	if (r->r_entry_valid) {
-		r->r_entry_valid = 1;
+	if (r->r_entry_inserted) {
+		r->r_entry_inserted = 0;
 		CK_LIST_REMOVE(r, r_entry);
 		l->l_remote_num--;
 	};
