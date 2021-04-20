@@ -59,6 +59,14 @@ siphash24(const SIPHASH_KEY *key, const void *src, size_t len)
 	return (SipHashX(&ctx, 2, 4, (const uint8_t *)key, src, len));
 }
 
+static inline uint64_t
+siphash13(const SIPHASH_KEY *key, const void *src, size_t len)
+{
+	SIPHASH_CTX ctx;
+
+	return (SipHashX(&ctx, 1, 3, (const uint8_t *)key, src, len));
+}
+
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 #endif

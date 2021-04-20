@@ -1270,17 +1270,15 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 	struct noise_remote		*remote = NULL;
 	int				 res;
 	bool				 underload = false;
-	static struct timeval		 wg_last_underload; /* microuptime */
-	static const struct timeval	 underload_interval = { UNDERLOAD_TIMEOUT, 0 };
+	static sbintime_t		 wg_last_underload; /* nanouptime */
 
-	if (wg_queue_len(&sc->sc_handshake_queue) >= MAX_QUEUED_HANDSHAKES/8) {
-		getmicrouptime(&wg_last_underload);
-		underload = true;
-	} else if (wg_last_underload.tv_sec != 0) {
-		if (!ratecheck(&wg_last_underload, &underload_interval))
-			underload = true;
-		else
-			bzero(&wg_last_underload, sizeof(wg_last_underload));
+	underload = wg_queue_len(&sc->sc_handshake_queue) >= MAX_QUEUED_HANDSHAKES / 8;
+	if (underload) {
+		wg_last_underload = getsbinuptime();
+	} else if (wg_last_underload) {
+		underload = wg_last_underload + UNDERLOAD_TIMEOUT * SBT_1S > getsbinuptime();
+		if (!underload)
+			wg_last_underload = 0;
 	}
 
 	m = pkt->p_mbuf;

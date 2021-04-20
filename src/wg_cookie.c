@@ -21,7 +21,7 @@ static void	cookie_macs_mac1(struct cookie_macs *, const void *, size_t,
 			const uint8_t[COOKIE_KEY_SIZE]);
 static void	cookie_macs_mac2(struct cookie_macs *, const void *, size_t,
 			const uint8_t[COOKIE_COOKIE_SIZE]);
-static int	cookie_timer_expired(struct timespec *, time_t, long);
+static int	cookie_timer_expired(sbintime_t, uint32_t, uint32_t);
 static void	cookie_checker_make_cookie(struct cookie_checker *,
 			uint8_t[COOKIE_COOKIE_SIZE], struct sockaddr *);
 static int	ratelimit_init(struct ratelimit *, uma_zone_t);
@@ -122,7 +122,7 @@ cookie_maker_consume_payload(struct cookie_maker *cp,
 	}
 
 	memcpy(cp->cp_cookie, cookie, COOKIE_COOKIE_SIZE);
-	getnanouptime(&cp->cp_birthdate);
+	cp->cp_birthdate = getsbinuptime();
 	cp->cp_mac1_valid = false;
 
 error:
@@ -141,7 +141,7 @@ cookie_maker_mac(struct cookie_maker *cp, struct cookie_macs *cm, void *buf,
 	memcpy(cp->cp_mac1_last, cm->mac1, COOKIE_MAC_SIZE);
 	cp->cp_mac1_valid = true;
 
-	if (!cookie_timer_expired(&cp->cp_birthdate,
+	if (!cookie_timer_expired(cp->cp_birthdate,
 	    COOKIE_SECRET_MAX_AGE - COOKIE_SECRET_LATENCY, 0))
 		cookie_macs_mac2(cm, buf, len, cp->cp_cookie);
 	else
@@ -226,18 +226,11 @@ cookie_macs_mac2(struct cookie_macs *cm, const void *buf, size_t len,
 	blake2s_final(&state, cm->mac2);
 }
 
-static int
-cookie_timer_expired(struct timespec *birthdate, time_t sec, long nsec)
+static __inline int
+cookie_timer_expired(sbintime_t timer, uint32_t sec, uint32_t nsec)
 {
-	struct timespec	uptime;
-	struct timespec	expire = { .tv_sec = sec, .tv_nsec = nsec };
-
-	if (birthdate->tv_sec == 0 && birthdate->tv_nsec == 0)
-		return ETIMEDOUT;
-
-	getnanouptime(&uptime);
-	timespecadd(birthdate, &expire, &expire);
-	return timespeccmp(&uptime, &expire, >) ? ETIMEDOUT : 0;
+	sbintime_t now = getsbinuptime();
+	return (now > (timer + sec * SBT_1S + nstosbt(nsec))) ? ETIMEDOUT : 0;
 }
 
 static void
@@ -247,10 +240,10 @@ cookie_checker_make_cookie(struct cookie_checker *cc,
 	struct blake2s_state state;
 
 	rw_enter_write(&cc->cc_secret_lock);
-	if (cookie_timer_expired(&cc->cc_secret_birthdate,
+	if (cookie_timer_expired(cc->cc_secret_birthdate,
 	    COOKIE_SECRET_MAX_AGE, 0)) {
 		arc4random_buf(cc->cc_secret, COOKIE_SECRET_SIZE);
-		getnanouptime(&cc->cc_secret_birthdate);
+		cc->cc_secret_birthdate = getsbinuptime();
 	}
 	blake2s_init_key(&state, COOKIE_COOKIE_SIZE, cc->cc_secret,
 	    COOKIE_SECRET_SIZE);
@@ -301,7 +294,7 @@ ratelimit_gc(struct ratelimit *rl, int force)
 {
 	size_t i;
 	struct ratelimit_entry *r, *tr;
-	struct timespec expiry;
+	sbintime_t expiry, now;
 
 	rw_assert_wrlock(&rl->rl_lock);
 
@@ -316,15 +309,15 @@ ratelimit_gc(struct ratelimit *rl, int force)
 		return;
 	}
 
-	if ((cookie_timer_expired(&rl->rl_last_gc, ELEMENT_TIMEOUT, 0) &&
+	if ((cookie_timer_expired(rl->rl_last_gc, ELEMENT_TIMEOUT, 0) &&
 	    rl->rl_table_num > 0)) {
-		getnanouptime(&rl->rl_last_gc);
-		getnanouptime(&expiry);
-		expiry.tv_sec -= ELEMENT_TIMEOUT;
+		now = getsbinuptime();
+		expiry = now - ELEMENT_TIMEOUT * SBT_1S;
+		rl->rl_last_gc = now;
 
 		for (i = 0; i < RATELIMIT_SIZE; i++) {
 			LIST_FOREACH_SAFE(r, &rl->rl_table[i], r_entry, tr) {
-				if (timespeccmp(&r->r_last_time, &expiry, <)) {
+				if (r->r_last_time < expiry) {
 					rl->rl_table_num--;
 					LIST_REMOVE(r, r_entry);
 					uma_zfree(rl->rl_zone, r);
@@ -338,17 +331,16 @@ static int
 ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa)
 {
 	uint64_t key, tokens;
-	struct timespec diff;
+	sbintime_t diff, now;
 	struct ratelimit_entry *r;
 	int ret = ECONNREFUSED;
 
 	if (sa->sa_family == AF_INET)
-		/* TODO siphash24 is the FreeBSD siphash, OK? */
-		key = siphash24(&rl->rl_secret, &satosin(sa)->sin_addr,
+		key = siphash13(&rl->rl_secret, &satosin(sa)->sin_addr,
 				IPV4_MASK_SIZE);
 #ifdef INET6
 	else if (sa->sa_family == AF_INET6)
-		key = siphash24(&rl->rl_secret, &satosin6(sa)->sin6_addr,
+		key = siphash13(&rl->rl_secret, &satosin6(sa)->sin6_addr,
 				IPV6_MASK_SIZE);
 #endif
 	else
@@ -377,11 +369,11 @@ ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa)
 		 * left (that is tokens <= INITIATION_COST) then we block the
 		 * request, otherwise we subtract the INITITIATION_COST and
 		 * return OK. */
-		diff = r->r_last_time;
-		getnanouptime(&r->r_last_time);
-		timespecsub(&r->r_last_time, &diff, &diff);
+		now = getsbinuptime();
+		diff = now - r->r_last_time;
+		r->r_last_time = now;
 
-		tokens = r->r_tokens + diff.tv_sec * NSEC_PER_SEC + diff.tv_nsec;
+		tokens = r->r_tokens + diff;
 
 		if (tokens > TOKEN_MAX)
 			tokens = TOKEN_MAX;
@@ -418,7 +410,7 @@ ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa)
 		memcpy(&r->r_in6, &satosin6(sa)->sin6_addr, IPV6_MASK_SIZE);
 #endif
 
-	getnanouptime(&r->r_last_time);
+	r->r_last_time = getsbinuptime();
 	r->r_tokens = TOKEN_MAX - INITIATION_COST;
 ok:
 	ret = 0;
