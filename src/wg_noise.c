@@ -77,6 +77,12 @@ struct noise_handshake {
 	uint8_t	 			 hs_ck[NOISE_HASH_LEN];
 };
 
+enum noise_handshake_state {
+	HANDSHAKE_DEAD,
+	HANDSHAKE_INITIATOR,
+	HANDSHAKE_RESPONDER,
+};
+
 struct noise_remote {
 	struct noise_index		 r_index;
 
@@ -86,8 +92,7 @@ struct noise_remote {
 
 	struct rwlock			 r_handshake_lock;
 	struct noise_handshake		 r_handshake;
-	bool				 r_handshake_alive;
-	bool				 r_handshake_initiator;
+	enum noise_handshake_state	 r_handshake_state;
 	sbintime_t			 r_last_sent; /* sbinuptime */
 	sbintime_t			 r_last_init_recv; /* sbinuptime */
 	uint8_t				 r_timestamp[NOISE_TIMESTAMP_LEN];
@@ -294,8 +299,7 @@ noise_remote_alloc(struct noise_local *l, void *arg,
 
 	rw_init(&r->r_handshake_lock, "noise_handshake");
 	bzero(&r->r_handshake, sizeof(r->r_handshake));
-	r->r_handshake_alive = false;
-	r->r_handshake_initiator = false;
+	r->r_handshake_state = HANDSHAKE_DEAD;
 	r->r_last_sent = TIMER_RESET;
 	r->r_last_init_recv = TIMER_RESET;
 	bzero(r->r_timestamp, NOISE_TIMESTAMP_LEN);
@@ -402,8 +406,6 @@ assign_id:
 	rw_wunlock(&l->l_index_lock);
 
 	NET_EPOCH_EXIT(et);
-
-	r->r_handshake_alive = true;
 }
 
 static struct noise_remote *
@@ -444,11 +446,11 @@ static int
 noise_remote_index_remove(struct noise_local *l, struct noise_remote *r)
 {
 	rw_assert_wrlock(&r->r_handshake_lock);
-	if (r->r_handshake_alive) {
+	if (r->r_handshake_state != HANDSHAKE_DEAD) {
 		rw_wlock(&l->l_index_lock);
 		CK_LIST_REMOVE(&r->r_index, i_entry);
 		rw_wunlock(&l->l_index_lock);
-		r->r_handshake_alive = false;
+		r->r_handshake_state = HANDSHAKE_DEAD;
 		return (1);
 	}
 	return (0);
@@ -651,7 +653,7 @@ noise_begin_session(struct noise_remote *r)
 
 	refcount_init(&kp->kp_refcnt, 1);
 	kp->kp_can_send = true;
-	kp->kp_is_initiator = r->r_handshake_initiator;
+	kp->kp_is_initiator = r->r_handshake_state == HANDSHAKE_INITIATOR;
 	kp->kp_birthdate = getsbinuptime();
 	kp->kp_remote = noise_remote_ref(r);
 
@@ -956,9 +958,9 @@ noise_create_initiation(struct noise_remote *r,
 	    NOISE_TIMESTAMP_LEN, key, hs->hs_hash);
 
 	noise_remote_index_insert(l, r);
+	r->r_handshake_state = HANDSHAKE_INITIATOR;
 	r->r_last_sent = getsbinuptime();
 	*s_idx = r->r_index.i_local_index;
-	r->r_handshake_initiator = true;
 	ret = 0;
 error:
 	rw_wunlock(&r->r_handshake_lock);
@@ -1031,7 +1033,7 @@ noise_consume_initiation(struct noise_local *l, struct noise_remote **rp,
 	/* Ok, we're happy to accept this initiation now */
 	noise_remote_index_insert(l, r);
 	r->r_index.i_remote_index = s_idx;
-	r->r_handshake_initiator = false;
+	r->r_handshake_state = HANDSHAKE_RESPONDER;
 	r->r_handshake = hs;
 	*rp = noise_remote_ref(r);
 	ret = 0;
@@ -1061,7 +1063,7 @@ noise_create_response(struct noise_remote *r,
 	rw_rlock(&l->l_identity_lock);
 	rw_wlock(&r->r_handshake_lock);
 
-	if (!r->r_handshake_alive || r->r_handshake_initiator)
+	if (r->r_handshake_state != HANDSHAKE_RESPONDER)
 		goto error;
 
 	/* e */
@@ -1117,7 +1119,7 @@ noise_consume_response(struct noise_local *l, struct noise_remote **rp,
 		goto error;
 
 	rw_rlock(&r->r_handshake_lock);
-	if (!r->r_handshake_alive || !r->r_handshake_initiator) {
+	if (r->r_handshake_state != HANDSHAKE_INITIATOR) {
 		rw_runlock(&r->r_handshake_lock);
 		goto error;
 	}
@@ -1145,7 +1147,7 @@ noise_consume_response(struct noise_local *l, struct noise_remote **rp,
 		goto error_zero;
 
 	rw_wlock(&r->r_handshake_lock);
-	if (r->r_handshake_alive && r->r_handshake_initiator &&
+	if (r->r_handshake_state == HANDSHAKE_INITIATOR &&
 	    r->r_index.i_local_index == r_idx) {
 		r->r_handshake = hs;
 		r->r_index.i_remote_index = s_idx;
