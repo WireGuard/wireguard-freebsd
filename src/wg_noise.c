@@ -280,7 +280,7 @@ noise_remote_alloc(struct noise_local *l, void *arg,
     const uint8_t public[NOISE_PUBLIC_KEY_LEN],
     const uint8_t psk[NOISE_PUBLIC_KEY_LEN])
 {
-	struct noise_remote *r, *ri;
+	struct noise_remote *r;
 	uint64_t idx;
 
 	if ((r = malloc(sizeof(*r), M_NOISE, M_NOWAIT)) == NULL)
@@ -313,14 +313,10 @@ noise_remote_alloc(struct noise_local *l, void *arg,
 	idx = siphash24(&l->l_hash_key, public, NOISE_PUBLIC_KEY_LEN) & HT_REMOTE_MASK;
 
 	rw_wlock(&l->l_remote_lock);
-	CK_LIST_FOREACH(ri, &l->l_remote_hash[idx], r_entry)
-		if (timingsafe_bcmp(ri->r_public, public, NOISE_PUBLIC_KEY_LEN) == 0)
-			goto free;
 	if (l->l_remote_num < MAX_REMOTE_PER_LOCAL) {
 		l->l_remote_num++;
 		CK_LIST_INSERT_HEAD(&l->l_remote_hash[idx], r, r_entry);
 	} else {
-free:
 		free(r, M_NOISE);
 		noise_local_put(l);
 		r = NULL;
