@@ -351,11 +351,12 @@ static void
 noise_remote_index_insert(struct noise_local *l, struct noise_remote *r)
 {
 	struct noise_index *i, *r_i = &r->r_index;
+	struct epoch_tracker et;
 	uint32_t idx;
 
 	noise_remote_index_remove(l, r);
 
-	rw_wlock(&l->l_index_lock);
+	NET_EPOCH_ENTER(et);
 assign_id:
 	r_i->i_local_index = arc4random();
 	idx = r_i->i_local_index & HT_INDEX_MASK;
@@ -363,8 +364,17 @@ assign_id:
 		if (i->i_local_index == r_i->i_local_index)
 			goto assign_id;
 
+	rw_wlock(&l->l_index_lock);
+	CK_LIST_FOREACH(i, &l->l_index_hash[idx], i_entry) {
+		if (i->i_local_index == r_i->i_local_index) {
+			rw_wunlock(&l->l_index_lock);
+			goto assign_id;
+		}
+	}
 	CK_LIST_INSERT_HEAD(&l->l_index_hash[idx], r_i, i_entry);
 	rw_wunlock(&l->l_index_lock);
+
+	NET_EPOCH_EXIT(et);
 
 	r->r_handshake_alive = 1;
 }
