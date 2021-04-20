@@ -1331,7 +1331,7 @@ noise_tai64n_now(uint8_t output[NOISE_TIMESTAMP_LEN])
 	memcpy(output + sizeof(sec), &nsec, sizeof(nsec));
 }
 
-static int
+static __inline int
 noise_timer_expired(sbintime_t timer, uint32_t sec, uint32_t nsec)
 {
 	sbintime_t now = getsbinuptime();
