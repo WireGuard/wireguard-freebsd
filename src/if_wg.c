@@ -448,10 +448,11 @@ wg_peer_free_deferred(struct noise_remote *r)
 static void
 wg_peer_destroy(struct wg_peer *peer)
 {
-	sx_assert(&peer->p_sc->sc_lock, SX_XLOCKED);
+	struct wg_softc *sc = peer->p_sc;
+	sx_assert(&sc->sc_lock, SX_XLOCKED);
 
 	noise_remote_disable(peer->p_remote);
-	wg_aip_remove_all(peer->p_sc, peer);
+	wg_aip_remove_all(sc, peer);
 
 	/* We disable all timers, so we can't call the following tasks. */
 	wg_timers_disable(peer);
@@ -468,9 +469,9 @@ wg_peer_destroy(struct wg_peer *peer)
 	wg_queue_deinit(&peer->p_stage_queue);
 
 	/* Final cleanup */
-	peer->p_sc->sc_peers_num--;
-	TAILQ_REMOVE(&peer->p_sc->sc_peers, peer, p_entry);
-	DPRINTF(peer->p_sc, "Peer %"PRIu64" destroyed\n", peer->p_id);
+	sc->sc_peers_num--;
+	TAILQ_REMOVE(&sc->sc_peers, peer, p_entry);
+	DPRINTF(sc, "Peer %"PRIu64" destroyed\n", peer->p_id);
 	noise_remote_free(peer->p_remote, wg_peer_free_deferred);
 }
 
@@ -1582,30 +1583,32 @@ wg_deliver_out(struct wg_peer *peer)
 	wg_peer_get_endpoint(peer, &endpoint);
 
 	while ((pkt = wg_queue_dequeue_serial(&peer->p_encrypt_serial)) != NULL) {
-		if (pkt->p_state == WG_PACKET_CRYPTED) {
-			m = pkt->p_mbuf;
-			pkt->p_mbuf = NULL;
+		if (pkt->p_state != WG_PACKET_CRYPTED)
+			goto error;
 
-			len = m->m_pkthdr.len;
+		m = pkt->p_mbuf;
+		pkt->p_mbuf = NULL;
 
-			rc = wg_send(sc, &endpoint, m);
-			if (rc == 0) {
-				wg_timers_event_any_authenticated_packet_traversal(peer);
-				wg_timers_event_any_authenticated_packet_sent(peer);
-				if (len > (sizeof(struct wg_pkt_data)+NOISE_AUTHTAG_LEN))
-					data_sent = true;
-				counter_u64_add(peer->p_tx_bytes, len);
-			} else if (rc == EADDRNOTAVAIL) {
-				wg_peer_clear_src(peer);
-				wg_peer_get_endpoint(peer, &endpoint);
-				goto error;
-			} else {
-				goto error;
-			}
+		len = m->m_pkthdr.len;
+
+		rc = wg_send(sc, &endpoint, m);
+		if (rc == 0) {
+			wg_timers_event_any_authenticated_packet_traversal(peer);
+			wg_timers_event_any_authenticated_packet_sent(peer);
+			if (len > (sizeof(struct wg_pkt_data)+NOISE_AUTHTAG_LEN))
+				data_sent = true;
+			counter_u64_add(peer->p_tx_bytes, len);
+		} else if (rc == EADDRNOTAVAIL) {
+			wg_peer_clear_src(peer);
+			wg_peer_get_endpoint(peer, &endpoint);
+			goto error;
 		} else {
-error:
-			if_inc_counter(peer->p_sc->sc_ifp, IFCOUNTER_OERRORS, 1);
+			goto error;
 		}
+		wg_packet_free(pkt);
+		continue;
+error:
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		wg_packet_free(pkt);
 	}
 
@@ -1626,49 +1629,52 @@ wg_deliver_in(struct wg_peer *peer)
 	bool			 data_recv = false;
 
 	while ((pkt = wg_queue_dequeue_serial(&peer->p_decrypt_serial)) != NULL) {
-		if (pkt->p_state == WG_PACKET_CRYPTED) {
-			m = pkt->p_mbuf;
-			if (noise_keypair_nonce_check(pkt->p_keypair, pkt->p_nonce) != 0)
-				goto error;
+		if (pkt->p_state != WG_PACKET_CRYPTED)
+			goto error;
 
-			if (noise_keypair_received_with(pkt->p_keypair) == ECONNRESET)
-				wg_timers_event_handshake_complete(peer);
+		m = pkt->p_mbuf;
+		if (noise_keypair_nonce_check(pkt->p_keypair, pkt->p_nonce) != 0)
+			goto error;
 
-			wg_timers_event_any_authenticated_packet_received(peer);
-			wg_timers_event_any_authenticated_packet_traversal(peer);
-			wg_peer_set_endpoint(peer, &pkt->p_endpoint);
+		if (noise_keypair_received_with(pkt->p_keypair) == ECONNRESET)
+			wg_timers_event_handshake_complete(peer);
 
-			counter_u64_add(peer->p_rx_bytes, m->m_pkthdr.len +
-			    sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN);
-			if_inc_counter(sc->sc_ifp, IFCOUNTER_IPACKETS, 1);
-			if_inc_counter(sc->sc_ifp, IFCOUNTER_IBYTES, m->m_pkthdr.len +
-			    sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN);
+		wg_timers_event_any_authenticated_packet_received(peer);
+		wg_timers_event_any_authenticated_packet_traversal(peer);
+		wg_peer_set_endpoint(peer, &pkt->p_endpoint);
 
-			if (m->m_pkthdr.len == 0)
-				goto free;
+		counter_u64_add(peer->p_rx_bytes, m->m_pkthdr.len +
+		    sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN);
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_IPACKETS, 1);
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_IBYTES, m->m_pkthdr.len +
+		    sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN);
 
-			MPASS(pkt->p_af == AF_INET || pkt->p_af == AF_INET6);
-			pkt->p_mbuf = NULL;
-			data_recv = true;
+		if (m->m_pkthdr.len == 0)
+			goto done;
 
-			m->m_flags &= ~(M_MCAST | M_BCAST);
-			m->m_pkthdr.rcvif = ifp;
+		MPASS(pkt->p_af == AF_INET || pkt->p_af == AF_INET6);
+		pkt->p_mbuf = NULL;
+		data_recv = true;
 
-			af = pkt->p_af;
-			BPF_MTAP2(ifp, &af, sizeof(af), m);
+		m->m_flags &= ~(M_MCAST | M_BCAST);
+		m->m_pkthdr.rcvif = ifp;
 
-			CURVNET_SET(ifp->if_vnet);
-			M_SETFIB(m, ifp->if_fib);
-			if (pkt->p_af == AF_INET)
-				netisr_dispatch(NETISR_IP, m);
-			if (pkt->p_af == AF_INET6)
-				netisr_dispatch(NETISR_IPV6, m);
-			CURVNET_RESTORE();
-		} else {
+		af = pkt->p_af;
+		BPF_MTAP2(ifp, &af, sizeof(af), m);
+
+		CURVNET_SET(ifp->if_vnet);
+		M_SETFIB(m, ifp->if_fib);
+		if (pkt->p_af == AF_INET)
+			netisr_dispatch(NETISR_IP, m);
+		if (pkt->p_af == AF_INET6)
+			netisr_dispatch(NETISR_IPV6, m);
+		CURVNET_RESTORE();
+
+done:
+		wg_packet_free(pkt);
+		continue;
 error:
-			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
-		}
-free:
+		if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 		wg_packet_free(pkt);
 	}
 
@@ -1962,9 +1968,9 @@ wg_peer_send_staged(struct wg_peer *peer)
 	STAILQ_FOREACH_SAFE(pkt, &list, p_parallel, tpkt) {
 		pkt->p_keypair = noise_keypair_ref(keypair);
 		if (wg_queue_both(&sc->sc_encrypt_parallel, &peer->p_encrypt_serial, pkt) != 0)
-			if_inc_counter(peer->p_sc->sc_ifp, IFCOUNTER_OQDROPS, 1);
+			if_inc_counter(sc->sc_ifp, IFCOUNTER_OQDROPS, 1);
 	}
-	wg_encrypt_dispatch(peer->p_sc);
+	wg_encrypt_dispatch(sc);
 	noise_keypair_put(keypair);
 	return;
 
