@@ -1,53 +1,19 @@
 /* SPDX-License-Identifier: ISC
  *
  * Copyright (C) 2021 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
- * Copyright (C) 2021 Matt Dunwoodie <ncon@noconroy.net>
+ * Copyright (c) 2021 Kyle Evans <kevans@FreeBSD.org>
  *
- * support.h contains functions that are either not _yet_ upstream in FreeBSD 14, or are shimmed
- * from OpenBSD. It is different from compat.h, which is strictly for backports.
+ * support.h contains code that is not _yet_ upstream in FreeBSD's main branch.
+ * It is different from compat.h, which is strictly for backports.
  */
 
 #ifndef _WG_SUPPORT
 #define _WG_SUPPORT
 
-#include <sys/types.h>
-#include <sys/limits.h>
-#include <sys/endian.h>
 #include <sys/socket.h>
-#include <sys/libkern.h>
-#include <sys/malloc.h>
-#include <sys/proc.h>
-#include <sys/lock.h>
 #include <sys/socketvar.h>
 #include <sys/protosw.h>
 #include <net/vnet.h>
-#include <vm/uma.h>
-
-/* TODO the following is openbsd compat defines to allow us to copy the wg_*
- * files from openbsd (almost) verbatim. this will greatly increase maintenance
- * across the platforms. it should be moved to it's own file. the only thing
- * we're missing from this is struct pool (freebsd: uma_zone_t), which isn't a
- * show stopper, but is something worth considering in the future.
- *  - md */
-
-#define rw_assert_wrlock(x) rw_assert(x, RA_WLOCKED)
-#define rw_enter_write rw_wlock
-#define rw_exit_write rw_wunlock
-#define rw_enter_read rw_rlock
-#define rw_exit_read rw_runlock
-#define rw_exit rw_unlock
-
-#define RW_DOWNGRADE 1
-#define rw_enter(x, y) do {		\
-	CTASSERT(y == RW_DOWNGRADE);	\
-	rw_downgrade(x);		\
-} while (0)
-
-MALLOC_DECLARE(M_WG);
-
-#ifndef ARRAY_SIZE
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
-#endif
 
 #ifndef PRIV_NET_WG
 #define PRIV_NET_WG PRIV_NET_HWIOCTL
@@ -64,7 +30,6 @@ MALLOC_DECLARE(M_WG);
 #ifndef ck_pr_load_bool
 #define ck_pr_load_bool(src) ((bool)ck_pr_load_8((uint8_t *)(src)))
 #endif
-
 
 static inline int
 sogetsockaddr(struct socket *so, struct sockaddr **nam)

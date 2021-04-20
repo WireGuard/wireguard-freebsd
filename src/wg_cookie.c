@@ -64,7 +64,7 @@ void
 cookie_checker_update(struct cookie_checker *cc,
     const uint8_t key[COOKIE_INPUT_SIZE])
 {
-	rw_enter_write(&cc->cc_key_lock);
+	rw_wlock(&cc->cc_key_lock);
 	if (key) {
 		cookie_precompute_key(cc->cc_mac1_key, key, COOKIE_MAC1_KEY_LABEL);
 		cookie_precompute_key(cc->cc_cookie_key, key, COOKIE_COOKIE_KEY_LABEL);
@@ -72,7 +72,7 @@ cookie_checker_update(struct cookie_checker *cc,
 		bzero(cc->cc_mac1_key, sizeof(cc->cc_mac1_key));
 		bzero(cc->cc_cookie_key, sizeof(cc->cc_cookie_key));
 	}
-	rw_exit_write(&cc->cc_key_lock);
+	rw_wunlock(&cc->cc_key_lock);
 }
 
 void
@@ -94,10 +94,10 @@ cookie_checker_create_payload(struct cookie_checker *cc,
 	cookie_checker_make_cookie(cc, cookie, sa);
 	arc4random_buf(nonce, COOKIE_NONCE_SIZE);
 
-	rw_enter_read(&cc->cc_key_lock);
+	rw_rlock(&cc->cc_key_lock);
 	xchacha20poly1305_encrypt(ecookie, cookie, COOKIE_COOKIE_SIZE,
 	    cm->mac1, COOKIE_MAC_SIZE, nonce, cc->cc_cookie_key);
-	rw_exit_read(&cc->cc_key_lock);
+	rw_runlock(&cc->cc_key_lock);
 
 	explicit_bzero(cookie, sizeof(cookie));
 }
@@ -109,7 +109,7 @@ cookie_maker_consume_payload(struct cookie_maker *cp,
 	int ret = 0;
 	uint8_t cookie[COOKIE_COOKIE_SIZE];
 
-	rw_enter_write(&cp->cp_lock);
+	rw_wlock(&cp->cp_lock);
 
 	if (!cp->cp_mac1_valid) {
 		ret = ETIMEDOUT;
@@ -127,7 +127,7 @@ cookie_maker_consume_payload(struct cookie_maker *cp,
 	cp->cp_mac1_valid = false;
 
 error:
-	rw_exit_write(&cp->cp_lock);
+	rw_wunlock(&cp->cp_lock);
 	return ret;
 }
 
@@ -135,7 +135,7 @@ void
 cookie_maker_mac(struct cookie_maker *cp, struct cookie_macs *cm, void *buf,
 		size_t len)
 {
-	rw_enter_read(&cp->cp_lock);
+	rw_rlock(&cp->cp_lock);
 
 	cookie_macs_mac1(cm, buf, len, cp->cp_mac1_key);
 
@@ -148,7 +148,7 @@ cookie_maker_mac(struct cookie_maker *cp, struct cookie_macs *cm, void *buf,
 	else
 		bzero(cm->mac2, COOKIE_MAC_SIZE);
 
-	rw_exit_read(&cp->cp_lock);
+	rw_runlock(&cp->cp_lock);
 }
 
 int
@@ -159,9 +159,9 @@ cookie_checker_validate_macs(struct cookie_checker *cc, struct cookie_macs *cm,
 	uint8_t cookie[COOKIE_COOKIE_SIZE];
 
 	/* Validate incoming MACs */
-	rw_enter_read(&cc->cc_key_lock);
+	rw_rlock(&cc->cc_key_lock);
 	cookie_macs_mac1(&our_cm, buf, len, cc->cc_mac1_key);
-	rw_exit_read(&cc->cc_key_lock);
+	rw_runlock(&cc->cc_key_lock);
 
 	/* If mac1 is invald, we want to drop the packet */
 	if (timingsafe_bcmp(our_cm.mac1, cm->mac1, COOKIE_MAC_SIZE) != 0)
@@ -240,7 +240,7 @@ cookie_checker_make_cookie(struct cookie_checker *cc,
 {
 	struct blake2s_state state;
 
-	rw_enter_write(&cc->cc_secret_lock);
+	rw_wlock(&cc->cc_secret_lock);
 	if (cookie_timer_expired(cc->cc_secret_birthdate,
 	    COOKIE_SECRET_MAX_AGE, 0)) {
 		arc4random_buf(cc->cc_secret, COOKIE_SECRET_SIZE);
@@ -248,7 +248,7 @@ cookie_checker_make_cookie(struct cookie_checker *cc,
 	}
 	blake2s_init_key(&state, COOKIE_COOKIE_SIZE, cc->cc_secret,
 	    COOKIE_SECRET_SIZE);
-	rw_exit_write(&cc->cc_secret_lock);
+	rw_wunlock(&cc->cc_secret_lock);
 
 	if (sa->sa_family == AF_INET) {
 		blake2s_update(&state, (uint8_t *)&satosin(sa)->sin_addr,
@@ -284,10 +284,10 @@ ratelimit_init(struct ratelimit *rl, uma_zone_t zone)
 static void
 ratelimit_deinit(struct ratelimit *rl)
 {
-	rw_enter_write(&rl->rl_lock);
+	rw_wlock(&rl->rl_lock);
 	ratelimit_gc(rl, 1);
 	hashdestroy(rl->rl_table, M_DEVBUF, rl->rl_table_mask);
-	rw_exit_write(&rl->rl_lock);
+	rw_wunlock(&rl->rl_lock);
 }
 
 static void
@@ -297,7 +297,7 @@ ratelimit_gc(struct ratelimit *rl, int force)
 	struct ratelimit_entry *r, *tr;
 	sbintime_t expiry, now;
 
-	rw_assert_wrlock(&rl->rl_lock);
+	rw_assert(&rl->rl_lock, RA_WLOCKED);
 
 	if (force) {
 		for (i = 0; i < RATELIMIT_SIZE; i++) {
@@ -347,7 +347,7 @@ ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa)
 	else
 		return ret;
 
-	rw_enter_write(&rl->rl_lock);
+	rw_wlock(&rl->rl_lock);
 
 	LIST_FOREACH(r, &rl->rl_table[key & rl->rl_table_mask], r_entry) {
 		if (r->r_af != sa->sa_family)
@@ -416,7 +416,7 @@ ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa)
 ok:
 	ret = 0;
 error:
-	rw_exit_write(&rl->rl_lock);
+	rw_wunlock(&rl->rl_lock);
 	return ret;
 }
 

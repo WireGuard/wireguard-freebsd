@@ -13,6 +13,7 @@
 #include <sys/refcount.h>
 #include <sys/epoch.h>
 #include <sys/ck.h>
+#include <sys/endian.h>
 #include <crypto/siphash/siphash.h>
 
 #include "crypto.h"
@@ -442,7 +443,7 @@ noise_remote_index(struct noise_local *l, uint32_t idx) {
 static int
 noise_remote_index_remove(struct noise_local *l, struct noise_remote *r)
 {
-	rw_assert_wrlock(&r->r_handshake_lock);
+	rw_assert(&r->r_handshake_lock, RA_WLOCKED);
 	if (r->r_handshake_state != HANDSHAKE_DEAD) {
 		rw_wlock(&l->l_index_lock);
 		CK_LIST_REMOVE(&r->r_index, i_entry);
@@ -626,7 +627,7 @@ noise_add_new_keypair(struct noise_local *l, struct noise_remote *r,
 	rw_wunlock(&r->r_keypair_lock);
 
 	/* Insert into index table */
-	rw_assert_wrlock(&r->r_handshake_lock);
+	rw_assert(&r->r_handshake_lock, RA_WLOCKED);
 
 	kp->kp_index.i_is_keypair = true;
 	kp->kp_index.i_local_index = r_i->i_local_index;
@@ -645,7 +646,7 @@ noise_begin_session(struct noise_remote *r)
 {
 	struct noise_keypair *kp;
 
-	rw_assert_wrlock(&r->r_handshake_lock);
+	rw_assert(&r->r_handshake_lock, RA_WLOCKED);
 
 	if ((kp = malloc(sizeof(*kp), M_NOISE, M_NOWAIT)) == NULL)
 		return (ENOSPC);
