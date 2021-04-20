@@ -75,6 +75,7 @@ struct noise_keypair *
 	noise_keypair_current(struct noise_remote *);
 struct noise_keypair *
 	noise_keypair_ref(struct noise_keypair *);
+int	noise_keypair_received_with(struct noise_keypair *);
 void	noise_keypair_put(struct noise_keypair *);
 
 struct noise_remote *

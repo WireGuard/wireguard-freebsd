@@ -1459,7 +1459,7 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	struct mbuf		*m;
 	struct ip		*ip;
 	struct ip6_hdr		*ip6;
-	int			 res, len;
+	int			 len;
 
 	peer = noise_keypair_remote_arg(pkt->p_keypair);
 	m = pkt->p_mbuf;
@@ -1470,15 +1470,8 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	m_adj(m, sizeof(struct wg_pkt_data));
 
 	pkt->p_nonce = le64toh(data.nonce);
-	res = noise_keypair_decrypt(pkt->p_keypair, pkt->p_nonce, m);
-
-	if (__predict_false(res == EINVAL)) {
+	if (noise_keypair_decrypt(pkt->p_keypair, pkt->p_nonce, m) != 0)
 		goto error;
-	} else if (__predict_false(res == ECONNRESET)) {
-		wg_timers_event_handshake_complete(peer);
-	} else if (__predict_false(res != 0)) {
-		panic("unexpected response: %d\n", res);
-	}
 
 	/* A packet with length 0 is a keepalive packet */
 	if (__predict_false(m->m_pkthdr.len == 0)) {
@@ -1630,6 +1623,9 @@ wg_deliver_in(struct wg_peer *peer)
 			m = pkt->p_mbuf;
 			if (noise_keypair_nonce_check(pkt->p_keypair, pkt->p_nonce) != 0)
 				goto error;
+
+			if (noise_keypair_received_with(pkt->p_keypair) == ECONNRESET)
+				wg_timers_event_handshake_complete(peer);
 
 			wg_timers_event_any_authenticated_packet_received(peer);
 			wg_timers_event_any_authenticated_packet_traversal(peer);

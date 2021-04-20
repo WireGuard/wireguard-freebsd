@@ -130,7 +130,6 @@ static int	noise_remote_index_remove(struct noise_local *, struct noise_remote *
 static void	noise_remote_expire_current(struct noise_remote *);
 
 static void	noise_add_new_keypair(struct noise_local *, struct noise_remote *, struct noise_keypair *);
-static int	noise_received_with(struct noise_keypair *);
 static int	noise_begin_session(struct noise_remote *);
 static void	noise_keypair_drop(struct noise_keypair *);
 
@@ -608,31 +607,6 @@ noise_add_new_keypair(struct noise_local *l, struct noise_remote *r,
 }
 
 static int
-noise_received_with(struct noise_keypair *kp)
-{
-	struct noise_keypair *old;
-	struct noise_remote *r = kp->kp_remote;
-
-	if (kp != epoch_ptr_read(&r->r_next))
-		return (0);
-
-	rw_wlock(&r->r_keypair_lock);
-	if (kp != epoch_ptr_read(&r->r_next)) {
-		rw_wunlock(&r->r_keypair_lock);
-		return (0);
-	}
-
-	old = epoch_ptr_read(&r->r_previous);
-	epoch_ptr_write(&r->r_previous, epoch_ptr_read(&r->r_current));
-	noise_keypair_drop(old);
-	epoch_ptr_write(&r->r_current, kp);
-	epoch_ptr_write(&r->r_next, NULL);
-	rw_wunlock(&r->r_keypair_lock);
-
-	return (ECONNRESET);
-}
-
-static int
 noise_begin_session(struct noise_remote *r)
 {
 	struct noise_keypair *kp;
@@ -711,6 +685,31 @@ noise_keypair_ref(struct noise_keypair *kp)
 {
 	refcount_acquire(&kp->kp_refcnt);
 	return (kp);
+}
+
+int
+noise_keypair_received_with(struct noise_keypair *kp)
+{
+	struct noise_keypair *old;
+	struct noise_remote *r = kp->kp_remote;
+
+	if (kp != epoch_ptr_read(&r->r_next))
+		return (0);
+
+	rw_wlock(&r->r_keypair_lock);
+	if (kp != epoch_ptr_read(&r->r_next)) {
+		rw_wunlock(&r->r_keypair_lock);
+		return (0);
+	}
+
+	old = epoch_ptr_read(&r->r_previous);
+	epoch_ptr_write(&r->r_previous, epoch_ptr_read(&r->r_current));
+	noise_keypair_drop(old);
+	epoch_ptr_write(&r->r_current, kp);
+	epoch_ptr_write(&r->r_next, NULL);
+	rw_wunlock(&r->r_keypair_lock);
+
+	return (ECONNRESET);
 }
 
 static void
@@ -875,9 +874,6 @@ noise_keypair_decrypt(struct noise_keypair *kp, uint64_t nonce, struct mbuf *m)
 
 	if (chacha20poly1305_decrypt_mbuf(m, nonce, kp->kp_recv) == 0)
 		return (EINVAL);
-
-	if (noise_received_with(kp) != 0)
-		return (ECONNRESET);
 
 	return (0);
 }
