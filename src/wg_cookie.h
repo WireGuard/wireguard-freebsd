@@ -11,9 +11,8 @@
 #include <sys/time.h>
 #include <sys/rwlock.h>
 #include <sys/queue.h>
-
 #include <netinet/in.h>
-
+#include <crypto/siphash/siphash.h>
 #include "crypto.h"
 
 #define COOKIE_MAC_SIZE		16
@@ -59,7 +58,7 @@ struct ratelimit_entry {
 };
 
 struct ratelimit {
-	SIPHASH_KEY			 rl_secret;
+	uint8_t				 rl_secret[SIPHASH_KEY_LENGTH];
 	uma_zone_t			 rl_zone;
 
 	struct rwlock			 rl_lock;

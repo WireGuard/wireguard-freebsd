@@ -28,6 +28,7 @@ static int	ratelimit_init(struct ratelimit *, uma_zone_t);
 static void	ratelimit_deinit(struct ratelimit *);
 static void	ratelimit_gc(struct ratelimit *, int);
 static int	ratelimit_allow(struct ratelimit *, struct sockaddr *);
+static uint64_t siphash13(const uint8_t [SIPHASH_KEY_LENGTH], const void *, size_t);
 
 /* Public Functions */
 void
@@ -272,7 +273,7 @@ static int
 ratelimit_init(struct ratelimit *rl, uma_zone_t zone)
 {
 	rw_init(&rl->rl_lock, "ratelimit_lock");
-	arc4random_buf(&rl->rl_secret, sizeof(rl->rl_secret));
+	arc4random_buf(rl->rl_secret, sizeof(rl->rl_secret));
 	rl->rl_table = hashinit_flags(RATELIMIT_SIZE, M_DEVBUF,
 	    &rl->rl_table_mask, M_NOWAIT);
 	rl->rl_zone = zone;
@@ -336,11 +337,11 @@ ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa)
 	int ret = ECONNREFUSED;
 
 	if (sa->sa_family == AF_INET)
-		key = siphash13(&rl->rl_secret, &satosin(sa)->sin_addr,
+		key = siphash13(rl->rl_secret, &satosin(sa)->sin_addr,
 				IPV4_MASK_SIZE);
 #ifdef INET6
 	else if (sa->sa_family == AF_INET6)
-		key = siphash13(&rl->rl_secret, &satosin6(sa)->sin6_addr,
+		key = siphash13(rl->rl_secret, &satosin6(sa)->sin6_addr,
 				IPV6_MASK_SIZE);
 #endif
 	else
@@ -417,4 +418,10 @@ ok:
 error:
 	rw_exit_write(&rl->rl_lock);
 	return ret;
+}
+
+static uint64_t siphash13(const uint8_t key[SIPHASH_KEY_LENGTH], const void *src, size_t len)
+{
+	SIPHASH_CTX ctx;
+	return (SipHashX(&ctx, 1, 3, key, src, len));
 }

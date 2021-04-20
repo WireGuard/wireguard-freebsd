@@ -13,6 +13,7 @@
 #include <sys/refcount.h>
 #include <sys/epoch.h>
 #include <sys/ck.h>
+#include <crypto/siphash/siphash.h>
 
 #include "crypto.h"
 #include "wg_noise.h"
@@ -117,7 +118,7 @@ struct noise_local {
 	uint8_t				 l_private[NOISE_PUBLIC_KEY_LEN];
 
 	u_int				 l_refcnt;
-	SIPHASH_KEY			 l_hash_key;
+	uint8_t				 l_hash_key[SIPHASH_KEY_LENGTH];
 	void				*l_arg;
 	void				(*l_cleanup)(struct noise_local *);
 
@@ -162,6 +163,7 @@ static void	noise_msg_ephemeral(uint8_t [NOISE_HASH_LEN], uint8_t [NOISE_HASH_LE
 		    const uint8_t [NOISE_PUBLIC_KEY_LEN]);
 static void	noise_tai64n_now(uint8_t [NOISE_TIMESTAMP_LEN]);
 static int	noise_timer_expired(sbintime_t, uint32_t, uint32_t);
+static uint64_t siphash24(const uint8_t [SIPHASH_KEY_LENGTH], const void *, size_t);
 
 /* I can't find where FreeBSD defines such behaviours, so that is temporarily here. */
 #define epoch_ptr_read(p) ck_pr_load_ptr(p)
@@ -186,7 +188,7 @@ noise_local_alloc(void *arg)
 	bzero(l->l_private, NOISE_PUBLIC_KEY_LEN);
 
 	refcount_init(&l->l_refcnt, 1);
-	arc4random_buf(&l->l_hash_key, sizeof(l->l_hash_key));
+	arc4random_buf(l->l_hash_key, sizeof(l->l_hash_key));
 	l->l_arg = arg;
 	l->l_cleanup = NULL;
 
@@ -326,7 +328,7 @@ noise_remote_enable(struct noise_remote *r)
 	int ret = 0;
 
 	/* Insert to hashtable */
-	idx = siphash24(&l->l_hash_key, r->r_public, NOISE_PUBLIC_KEY_LEN) & HT_REMOTE_MASK;
+	idx = siphash24(l->l_hash_key, r->r_public, NOISE_PUBLIC_KEY_LEN) & HT_REMOTE_MASK;
 
 	rw_wlock(&l->l_remote_lock);
 	if (!r->r_entry_inserted) {
@@ -364,7 +366,7 @@ noise_remote_lookup(struct noise_local *l, const uint8_t public[NOISE_PUBLIC_KEY
 	struct noise_remote *r, *ret = NULL;
 	uint64_t idx;
 
-	idx = siphash24(&l->l_hash_key, public, NOISE_PUBLIC_KEY_LEN) & HT_REMOTE_MASK;
+	idx = siphash24(l->l_hash_key, public, NOISE_PUBLIC_KEY_LEN) & HT_REMOTE_MASK;
 
 	NET_EPOCH_ENTER(et);
 	CK_LIST_FOREACH(r, &l->l_remote_hash[idx], r_entry) {
@@ -1336,4 +1338,10 @@ noise_timer_expired(sbintime_t timer, uint32_t sec, uint32_t nsec)
 {
 	sbintime_t now = getsbinuptime();
 	return (now > (timer + sec * SBT_1S + nstosbt(nsec))) ? ETIMEDOUT : 0;
+}
+
+static uint64_t siphash24(const uint8_t key[SIPHASH_KEY_LENGTH], const void *src, size_t len)
+{
+	SIPHASH_CTX ctx;
+	return (SipHashX(&ctx, 2, 4, key, src, len));
 }
