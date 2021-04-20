@@ -51,7 +51,7 @@ void	noise_remote_disable(struct noise_remote *);
 struct noise_remote *
 	noise_remote_lookup(struct noise_local *, const uint8_t[NOISE_PUBLIC_KEY_LEN]);
 struct noise_remote *
-	noise_remote_index_lookup(struct noise_local *, uint32_t);
+	noise_remote_index(struct noise_local *, uint32_t);
 struct noise_remote *
 	noise_remote_ref(struct noise_remote *);
 void	noise_remote_put(struct noise_remote *);

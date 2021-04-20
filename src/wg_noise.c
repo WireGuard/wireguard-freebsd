@@ -127,6 +127,8 @@ struct noise_local {
 static void	noise_precompute_ss(struct noise_local *, struct noise_remote *);
 
 static void	noise_remote_index_insert(struct noise_local *, struct noise_remote *);
+static struct noise_remote *
+		noise_remote_index_lookup(struct noise_local *, uint32_t, int);
 static int	noise_remote_index_remove(struct noise_local *, struct noise_remote *);
 static void	noise_remote_expire_current(struct noise_remote *);
 
@@ -397,8 +399,8 @@ assign_id:
 	r->r_handshake_alive = 1;
 }
 
-struct noise_remote *
-noise_remote_index_lookup(struct noise_local *l, uint32_t idx0)
+static struct noise_remote *
+noise_remote_index_lookup(struct noise_local *l, uint32_t idx0, int lookup_keypair)
 {
 	struct epoch_tracker et;
 	struct noise_index *i;
@@ -409,11 +411,13 @@ noise_remote_index_lookup(struct noise_local *l, uint32_t idx0)
 	NET_EPOCH_ENTER(et);
 	CK_LIST_FOREACH(i, &l->l_index_hash[idx], i_entry) {
 		if (i->i_local_index == idx0) {
-			if (i->i_is_keypair) {
+			if (!i->i_is_keypair) {
+				r = (struct noise_remote *) i;
+			} else if (lookup_keypair) {
 				kp = (struct noise_keypair *) i;
 				r = kp->kp_remote;
 			} else {
-				r = (struct noise_remote *) i;
+				break;
 			}
 			if (refcount_acquire_if_not_zero(&r->r_refcnt))
 				ret = r;
@@ -422,6 +426,11 @@ noise_remote_index_lookup(struct noise_local *l, uint32_t idx0)
 	}
 	NET_EPOCH_EXIT(et);
 	return (ret);
+}
+
+struct noise_remote *
+noise_remote_index(struct noise_local *l, uint32_t idx) {
+	return noise_remote_index_lookup(l, idx, 1);
 }
 
 static int
@@ -1093,7 +1102,7 @@ noise_consume_response(struct noise_local *l, struct noise_remote **rp,
 	struct noise_remote *r = NULL;
 	int ret = EINVAL;
 
-	if ((r = noise_remote_index_lookup(l, r_idx)) == NULL)
+	if ((r = noise_remote_index_lookup(l, r_idx, 0)) == NULL)
 		return (ret);
 
 	rw_rlock(&l->l_identity_lock);

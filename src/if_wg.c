@@ -1356,7 +1356,7 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 	case WG_PKT_COOKIE:
 		cook = mtod(m, struct wg_pkt_cookie *);
 
-		if ((remote = noise_remote_index_lookup(sc->sc_local, cook->r_idx)) == NULL) {
+		if ((remote = noise_remote_index(sc->sc_local, cook->r_idx)) == NULL) {
 			DPRINTF(sc, "Unknown cookie index\n");
 			goto error;
 		}
