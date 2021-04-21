@@ -26,7 +26,9 @@ static void	cookie_checker_make_cookie(struct cookie_checker *,
 			uint8_t[COOKIE_COOKIE_SIZE], struct sockaddr *);
 static int	ratelimit_init(struct ratelimit *, uma_zone_t);
 static void	ratelimit_deinit(struct ratelimit *);
-static void	ratelimit_gc(struct ratelimit *, int);
+static void	ratelimit_gc_callout(void *);
+static void	ratelimit_gc_schedule(struct ratelimit *);
+static void	ratelimit_gc(struct ratelimit *, bool);
 static int	ratelimit_allow(struct ratelimit *, struct sockaddr *);
 static uint64_t siphash13(const uint8_t [SIPHASH_KEY_LENGTH], const void *, size_t);
 
@@ -273,6 +275,7 @@ static int
 ratelimit_init(struct ratelimit *rl, uma_zone_t zone)
 {
 	rw_init(&rl->rl_lock, "ratelimit_lock");
+	callout_init_rw(&rl->rl_gc, &rl->rl_lock, 0);
 	arc4random_buf(rl->rl_secret, sizeof(rl->rl_secret));
 	rl->rl_table = hashinit_flags(RATELIMIT_SIZE, M_DEVBUF,
 	    &rl->rl_table_mask, M_NOWAIT);
@@ -285,47 +288,58 @@ static void
 ratelimit_deinit(struct ratelimit *rl)
 {
 	rw_wlock(&rl->rl_lock);
-	ratelimit_gc(rl, 1);
+	callout_stop(&rl->rl_gc);
+	ratelimit_gc(rl, true);
 	hashdestroy(rl->rl_table, M_DEVBUF, rl->rl_table_mask);
 	rw_wunlock(&rl->rl_lock);
 }
 
 static void
-ratelimit_gc(struct ratelimit *rl, int force)
+ratelimit_gc_callout(void *_rl)
+{
+	/* callout will wlock rl_lock for us */
+	ratelimit_gc(_rl, false);
+}
+
+static void
+ratelimit_gc_schedule(struct ratelimit *rl)
+{
+	/* Trigger another GC if needed. There is no point calling GC if there
+	 * are no entries in the table. We also want to ensure that GC occurs
+	 * on a regular interval, so don't override a currently pending GC.
+	 *
+	 * In the case of a forced ratelimit_gc, there will be no entries left
+	 * so we will will not schedule another GC. */
+	if (rl->rl_table_num > 0 && !callout_pending(&rl->rl_gc))
+		callout_reset(&rl->rl_gc, ELEMENT_TIMEOUT * hz,
+		    ratelimit_gc_callout, rl);
+}
+
+static void
+ratelimit_gc(struct ratelimit *rl, bool force)
 {
 	size_t i;
 	struct ratelimit_entry *r, *tr;
-	sbintime_t expiry, now;
+	sbintime_t expiry;
 
 	rw_assert(&rl->rl_lock, RA_WLOCKED);
 
-	if (force) {
-		for (i = 0; i < RATELIMIT_SIZE; i++) {
-			LIST_FOREACH_SAFE(r, &rl->rl_table[i], r_entry, tr) {
+	if (rl->rl_table_num == 0)
+		return;
+
+	expiry = getsbinuptime() - ELEMENT_TIMEOUT * SBT_1S;
+
+	for (i = 0; i < RATELIMIT_SIZE; i++) {
+		LIST_FOREACH_SAFE(r, &rl->rl_table[i], r_entry, tr) {
+			if (r->r_last_time < expiry || force) {
 				rl->rl_table_num--;
 				LIST_REMOVE(r, r_entry);
 				uma_zfree(rl->rl_zone, r);
 			}
 		}
-		return;
 	}
 
-	if ((cookie_timer_expired(rl->rl_last_gc, ELEMENT_TIMEOUT, 0) &&
-	    rl->rl_table_num > 0)) {
-		now = getsbinuptime();
-		expiry = now - ELEMENT_TIMEOUT * SBT_1S;
-		rl->rl_last_gc = now;
-
-		for (i = 0; i < RATELIMIT_SIZE; i++) {
-			LIST_FOREACH_SAFE(r, &rl->rl_table[i], r_entry, tr) {
-				if (r->r_last_time < expiry) {
-					rl->rl_table_num--;
-					LIST_REMOVE(r, r_entry);
-					uma_zfree(rl->rl_zone, r);
-				}
-			}
-		}
-	}
+	ratelimit_gc_schedule(rl);
 }
 
 static int
@@ -388,10 +402,8 @@ ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa)
 		}
 	}
 
-	/* If we get to here, we didn't have an entry for the endpoint. */
-	ratelimit_gc(rl, 0);
-
-	/* Hard limit on number of entries */
+	/* If we get to here, we didn't have an entry for the endpoint, let's
+	 * add one if we have space. */
 	if (rl->rl_table_num >= RATELIMIT_SIZE_MAX)
 		goto error;
 
@@ -413,6 +425,9 @@ ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa)
 
 	r->r_last_time = getsbinuptime();
 	r->r_tokens = TOKEN_MAX - INITIATION_COST;
+
+	/* If we've added a new entry, let's trigger GC. */
+	ratelimit_gc_schedule(rl);
 ok:
 	ret = 0;
 error:

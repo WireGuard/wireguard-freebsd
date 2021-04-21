@@ -62,10 +62,10 @@ struct ratelimit {
 	uma_zone_t			 rl_zone;
 
 	struct rwlock			 rl_lock;
+	struct callout			 rl_gc;
 	LIST_HEAD(, ratelimit_entry)	*rl_table;
 	u_long				 rl_table_mask;
 	size_t				 rl_table_num;
-	sbintime_t			 rl_last_gc;	/* sbinuptime */
 };
 
 struct cookie_maker {
