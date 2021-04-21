@@ -7,8 +7,7 @@
 - Work out `priv_check` from vnet perspective. (There's no `ns_capable()` on
   FreeBSD, just `capable()`, which makes it a bit weird for one jail to have
   permissions in another.)
-- Audit allowedips / radix tree checks, and make sure it's actually behaving as
-  expected. (It might be useful to port [this selftest](https://git.zx2c4.com/wireguard-linux/tree/drivers/net/wireguard/selftest/allowedips.c).)
+- Port ratelimiter and counter [selftests](https://git.zx2c4.com/wireguard-linux/tree/drivers/net/wireguard/selftest).
 - Make code style consistent with one FreeBSD way, rather than a mix of styles.
 - Run ratelimiter gc in a properly scheduled manner.
 - Make sure noise state machine is correct.
