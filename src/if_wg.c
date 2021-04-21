@@ -1270,7 +1270,7 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 	struct noise_remote		*remote = NULL;
 	int				 res;
 	bool				 underload = false;
-	static sbintime_t		 wg_last_underload; /* nanouptime */
+	static sbintime_t		 wg_last_underload; /* sbinuptime */
 
 	underload = wg_queue_len(&sc->sc_handshake_queue) >= MAX_QUEUED_HANDSHAKES / 8;
 	if (underload) {

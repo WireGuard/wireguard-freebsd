@@ -53,7 +53,7 @@ struct ratelimit_entry {
 		struct in6_addr		 r_in6;
 #endif
 	};
-	sbintime_t			 r_last_time;	/* nanouptime */
+	sbintime_t			 r_last_time;	/* sbinuptime */
 	uint64_t			 r_tokens;
 };
 
@@ -65,7 +65,7 @@ struct ratelimit {
 	LIST_HEAD(, ratelimit_entry)	*rl_table;
 	u_long				 rl_table_mask;
 	size_t				 rl_table_num;
-	sbintime_t			 rl_last_gc;	/* nanouptime */
+	sbintime_t			 rl_last_gc;	/* sbinuptime */
 };
 
 struct cookie_maker {
@@ -74,7 +74,7 @@ struct cookie_maker {
 
 	struct rwlock	cp_lock;
 	uint8_t		cp_cookie[COOKIE_COOKIE_SIZE];
-	sbintime_t	cp_birthdate;	/* nanouptime */
+	sbintime_t	cp_birthdate;	/* sbinuptime */
 	bool		cp_mac1_valid;
 	uint8_t		cp_mac1_last[COOKIE_MAC_SIZE];
 };
@@ -90,7 +90,7 @@ struct cookie_checker {
 	uint8_t			cc_cookie_key[COOKIE_KEY_SIZE];
 
 	struct rwlock		cc_secret_lock;
-	sbintime_t		cc_secret_birthdate;	/* nanouptime */
+	sbintime_t		cc_secret_birthdate;	/* sbinuptime */
 	uint8_t			cc_secret[COOKIE_SECRET_SIZE];
 };
 
