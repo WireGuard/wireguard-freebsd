@@ -1397,11 +1397,42 @@ wg_softc_handshake_receive(struct wg_softc *sc)
 static void
 wg_mbuf_reset(struct mbuf *m)
 {
-	/* TODO a second opinion on what metadata is to be cleared would be
-	 * nice. Not many other drivers do this, so there aren't many examples. */
-	m->m_flags &= ~(M_BCAST|M_MCAST|M_VLANTAG);
-	m->m_flags &= ~(M_PROTO1|M_PROTO2|M_PROTO3|M_PROTO4|M_PROTO5|M_PROTO6|
-			M_PROTO7|M_PROTO8|M_PROTO9|M_PROTO10|M_PROTO11);
+
+	struct m_tag *t, *tmp;
+
+	/*
+	 * We want to reset the mbuf to a newly allocated state, containing
+	 * just the packet contents. Unfortunately FreeBSD doesn't seem to
+	 * offer this anywhere, so we have to make it up as we go. If we can
+	 * get this in kern/kern_mbuf.c, that would be best.
+	 *
+	 * Notice: this may break things unexpectedly but it is better to fail
+	 *         closed in the extreme case than leak informtion in every
+	 *         case.
+	 *
+	 * With that said, all this attempts to do is remove any extraneous
+	 * information that could be present.
+	 */
+
+	M_ASSERTPKTHDR(m);
+
+	m->m_flags &= ~(M_BCAST|M_MCAST|M_VLANTAG|M_PROMISC|M_PROTOFLAGS);
+
+	M_HASHTYPE_CLEAR(m);
+#ifdef NUMA
+        m->m_pkthdr.numa_domain = M_NODOM;
+#endif
+	SLIST_FOREACH_SAFE(t, &m->m_pkthdr.tags, m_tag_link, tmp)
+		if (t->m_tag_id != 0 && t->m_tag_cookie != MTAG_WGLOOP &&
+		    t->m_tag_id != PACKET_TAG_MACLABEL)
+			m_tag_delete(m, t);
+
+	if (m->m_pkthdr.csum_flags & CSUM_SND_TAG)
+		m_snd_tag_rele(m->m_pkthdr.snd_tag);
+
+	m->m_pkthdr.csum_flags = 0;
+	m->m_pkthdr.PH_per.sixtyfour[0] = 0;
+	m->m_pkthdr.PH_loc.sixtyfour[0] = 0;
 }
 
 static void
@@ -1650,7 +1681,6 @@ wg_deliver_in(struct wg_peer *peer)
 		pkt->p_mbuf = NULL;
 		data_recv = true;
 
-		m->m_flags &= ~(M_MCAST | M_BCAST);
 		m->m_pkthdr.rcvif = ifp;
 
 		af = pkt->p_af;
