@@ -389,9 +389,10 @@ noise_remote_index_insert(struct noise_local *l, struct noise_remote *r)
 assign_id:
 	r_i->i_local_index = arc4random();
 	idx = r_i->i_local_index & HT_INDEX_MASK;
-	CK_LIST_FOREACH(i, &l->l_index_hash[idx], i_entry)
+	CK_LIST_FOREACH(i, &l->l_index_hash[idx], i_entry) {
 		if (i->i_local_index == r_i->i_local_index)
 			goto assign_id;
+	}
 
 	rw_wlock(&l->l_index_lock);
 	CK_LIST_FOREACH(i, &l->l_index_hash[idx], i_entry) {
