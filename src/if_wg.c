@@ -2786,6 +2786,7 @@ wg_prison_remove(void *obj, void *data __unused)
 static void wg_run_selftests(void)
 {
 	wg_allowedips_selftest();
+	noise_counter_selftest();
 	cookie_selftest();
 }
 #else

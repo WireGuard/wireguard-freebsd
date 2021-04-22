@@ -1343,3 +1343,7 @@ static uint64_t siphash24(const uint8_t key[SIPHASH_KEY_LENGTH], const void *src
 	SIPHASH_CTX ctx;
 	return (SipHashX(&ctx, 2, 4, key, src, len));
 }
+
+#ifdef SELFTESTS
+#include "selftest/counter.c"
+#endif /* SELFTESTS */
