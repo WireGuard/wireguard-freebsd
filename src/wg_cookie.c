@@ -440,3 +440,7 @@ static uint64_t siphash13(const uint8_t key[SIPHASH_KEY_LENGTH], const void *src
 	SIPHASH_CTX ctx;
 	return (SipHashX(&ctx, 1, 3, key, src, len));
 }
+
+#ifdef SELFTESTS
+#include "selftest/cookie.c"
+#endif /* SELFTESTS */

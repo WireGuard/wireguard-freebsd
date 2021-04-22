@@ -109,4 +109,8 @@ void	cookie_maker_mac(struct cookie_maker *, struct cookie_macs *,
 int	cookie_checker_validate_macs(struct cookie_checker *,
 	    struct cookie_macs *, void *, size_t, int, struct sockaddr *);
 
+#ifdef SELFTESTS
+void	cookie_selftest(void);
+#endif /* SELFTESTS */
+
 #endif /* __COOKIE_H__ */
