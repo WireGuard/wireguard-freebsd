@@ -272,6 +272,9 @@ struct wg_softc {
 
 #define	WGF_DYING	0x0001
 
+#define MAX_LOOPS	8
+#define MTAG_WGLOOP	0x77676c70 /* wglp */
+
 /* TODO the following defines are freebsd specific, we should see what is
  * necessary and cleanup from there (i suspect a lot can be junked). */
 
@@ -2006,9 +2009,7 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 		goto err;
 	}
 
-	/* Detect packet loops, TODO make better unique identifier than p_id
-	 * (because it is truncated from uint64_t to uint32_t). */
-	if (__predict_false(if_tunnel_check_nesting(ifp, m, peer->p_id, 1))) {
+	if (__predict_false(if_tunnel_check_nesting(ifp, m, MTAG_WGLOOP, MAX_LOOPS))) {
 		DPRINTF(sc, "Packet looped");
 		rc = ELOOP;
 		goto err;
