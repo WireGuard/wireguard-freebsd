@@ -8,9 +8,19 @@
   FreeBSD, just `capable()`, which makes it a bit weird for one jail to have
   permissions in another.)
 - Make code style consistent with one FreeBSD way, rather than a mix of styles.
-- Run ratelimiter gc in a properly scheduled manner.
 - Make sure noise state machine is correct.
-- Clear mbuf tags and other members properly.
+- The cookie logic appears to be broken in unusual ways, in particular right
+  after boot up. Audit and compare all `is_valid` checks, as well as
+  `have_sent_mac1` guards.
+- Investigate whether the allowed ips lookup structure needs reference
+  counting.
+- Handle failures of `rn_inithead` and remember to call `rn_detachhead`
+  somewhere during cleanup.
+- Stop using `M_WAITOK` and use `M_NOWAIT` instead.
+- Make sure ratelimiter is empty and deinited.
+- Check return value of `rn_inithead`.
+- Perhaps call `rn_detachhead` to free memory when destroying aip.
+- Have one rate limiter table per module, and hash in jail/fib pointer.
 
 ### Crypto TODO
 
