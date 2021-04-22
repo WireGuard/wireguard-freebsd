@@ -1423,7 +1423,7 @@ wg_mbuf_reset(struct mbuf *m)
         m->m_pkthdr.numa_domain = M_NODOM;
 #endif
 	SLIST_FOREACH_SAFE(t, &m->m_pkthdr.tags, m_tag_link, tmp) {
-		if (t->m_tag_id != 0 && t->m_tag_cookie != MTAG_WGLOOP &&
+		if ((t->m_tag_id != 0 || t->m_tag_cookie != MTAG_WGLOOP) &&
 		    t->m_tag_id != PACKET_TAG_MACLABEL)
 			m_tag_delete(m, t);
 	}
