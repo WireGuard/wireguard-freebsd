@@ -1,3 +1,9 @@
+/* SPDX-License-Identifier: MIT
+ *
+ * Copyright (C) 2015-2021 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+ * Copyright (C) 2019-2021 Matt Dunwoodie <ncon@noconroy.net>
+ */
+
 #define T_LIM (COUNTER_WINDOW_SIZE + 1)
 #define T_INIT do {				\
 	bzero(&kp, sizeof(kp));			\

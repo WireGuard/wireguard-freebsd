@@ -1,3 +1,9 @@
+/* SPDX-License-Identifier: MIT
+ *
+ * Copyright (C) 2015-2021 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+ * Copyright (C) 2019-2021 Matt Dunwoodie <ncon@noconroy.net>
+ */
+
 #define MESSAGE_LEN 64
 #define T_FAILED_ITER(test) do {				\
 	printf("%s %s: fail, iter: %d\n", __func__, test, i);	\

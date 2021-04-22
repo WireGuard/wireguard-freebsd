@@ -1,16 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0
-/*
+/* SPDX-License-Identifier: MIT
+ *
  * Copyright (C) 2015-2021 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  */
-
-#include <sys/cdefs.h>
-#include <sys/param.h>
-#include <sys/types.h>
-#include <sys/systm.h>
-#include <sys/queue.h>
-#include <sys/endian.h>
-#include <netinet/in.h>
-#include <net/radix.h>
 
 #ifdef WG_ALLOWEDIPS_RANDOMIZED_TEST
 enum {
