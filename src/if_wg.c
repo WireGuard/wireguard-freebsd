@@ -405,7 +405,7 @@ wg_peer_alloc(struct wg_softc *sc, const uint8_t pub_key[WG_KEY_SIZE])
 
 	sx_assert(&sc->sc_lock, SX_XLOCKED);
 
-	if ((peer = malloc(sizeof(*peer), M_WG, M_NOWAIT|M_ZERO)) == NULL)
+	if ((peer = malloc(sizeof(*peer), M_WG, M_NOWAIT | M_ZERO)) == NULL)
 		goto free_none;
 
 	if ((peer->p_remote = noise_remote_alloc(sc->sc_local, peer, pub_key)) == NULL)
@@ -2232,7 +2232,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	if (wgd->wgd_size >= UINT32_MAX / 2)
 		return (E2BIG);
 
-	if ((nvlpacked = malloc(wgd->wgd_size, M_TEMP, M_NOWAIT)) == NULL)
+	if ((nvlpacked = malloc(wgd->wgd_size, M_TEMP, M_NOWAIT | M_ZERO)) == NULL)
 		return (ENOMEM);
 
 	sx_xlock(&sc->sc_lock);
@@ -2601,10 +2601,10 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	if ((sc->sc_local = noise_local_alloc(sc)) == NULL)
 		goto free_sc;
 
-	if ((sc->sc_encrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_NOWAIT)) == NULL)
+	if ((sc->sc_encrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_NOWAIT | M_ZERO)) == NULL)
 		goto free_local;
 
-	if ((sc->sc_decrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_NOWAIT)) == NULL)
+	if ((sc->sc_decrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_NOWAIT | M_ZERO)) == NULL)
 		goto free_encrypt;
 
 	if (!rn_inithead((void **)&sc->sc_aip4, offsetof(struct aip_addr, in) * NBBY))
