@@ -14,8 +14,6 @@
 - Handle failures of `rn_inithead` and remember to call `rn_detachhead`
   somewhere during cleanup.
 - Stop using `M_WAITOK` and use `M_NOWAIT` instead.
-- Check return value of `rn_inithead`.
-- Perhaps call `rn_detachhead` to free memory when destroying aip.
 - Hash in jail/fib pointer to ratelimiter.
 
 ### Crypto TODO

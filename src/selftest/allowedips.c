@@ -3,6 +3,29 @@
  * Copyright (C) 2015-2021 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  */
 
+static bool test_aip_init(struct wg_softc *sc)
+{
+	if (!rn_inithead((void **)&sc->sc_aip4, offsetof(struct aip_addr, in) * NBBY))
+		return false;
+	if (!rn_inithead((void **)&sc->sc_aip6, offsetof(struct aip_addr, in6) * NBBY))
+		return false;
+	RADIX_NODE_HEAD_LOCK_INIT(sc->sc_aip4);
+	RADIX_NODE_HEAD_LOCK_INIT(sc->sc_aip6);
+	return true;
+}
+
+static void test_aip_deinit(struct wg_softc *sc)
+{
+	if (sc->sc_aip4) {
+		RADIX_NODE_HEAD_DESTROY(sc->sc_aip4);
+		rn_detachhead((void **)&sc->sc_aip4);
+	}
+	if (sc->sc_aip6) {
+		RADIX_NODE_HEAD_DESTROY(sc->sc_aip6);
+		rn_detachhead((void **)&sc->sc_aip6);
+	}
+}
+
 #ifdef WG_ALLOWEDIPS_RANDOMIZED_TEST
 enum {
 	NUM_PEERS = 2000,
@@ -197,13 +220,6 @@ static bool randomized_test(void)
 	struct horrible_allowedips h;
 	struct wg_softc sc = { 0 };
 	bool ret = false;
-
-	rn_inithead((void **)&sc.sc_aip4, offsetof(struct aip_addr, in) * NBBY);
-	rn_inithead((void **)&sc.sc_aip6, offsetof(struct aip_addr, in6) * NBBY);
-	RADIX_NODE_HEAD_LOCK_INIT(sc.sc_aip4);
-	RADIX_NODE_HEAD_LOCK_INIT(sc.sc_aip6);
-	horrible_allowedips_init(&h);
-
 	peers = mallocarray(NUM_PEERS, sizeof(*peers), M_WG, M_NOWAIT | M_ZERO);
 	if (!peers) {
 		printf("allowedips random self-test malloc: FAIL\n");
@@ -218,6 +234,12 @@ static bool randomized_test(void)
 		LIST_INIT(&peers[i]->p_aips);
 		peers[i]->p_aips_num = 0;
 	}
+
+	if (!test_aip_init(&sc)) {
+		printf("allowedips random self-test malloc: FAIL\n");
+		goto free;
+	}
+	horrible_allowedips_init(&h);
 
 	for (i = 0; i < NUM_RAND_ROUTES; ++i) {
 		arc4random_buf(ip, 4);
@@ -330,6 +352,7 @@ free:
 			free(peers[i], M_WG);
 	}
 	free(peers, M_WG);
+	test_aip_deinit(&sc);
 	return ret;
 }
 #endif
@@ -428,10 +451,10 @@ static bool wg_allowedips_selftest(void)
 	struct in6_addr ip;
 	uint64_t part;
 
-	rn_inithead((void **)&sc.sc_aip4, offsetof(struct aip_addr, in) * NBBY);
-	rn_inithead((void **)&sc.sc_aip6, offsetof(struct aip_addr, in6) * NBBY);
-	RADIX_NODE_HEAD_LOCK_INIT(sc.sc_aip4);
-	RADIX_NODE_HEAD_LOCK_INIT(sc.sc_aip6);
+	if (!test_aip_init(&sc)) {
+		printf("allowedips self-test malloc: FAIL\n");
+		goto free;
+	}
 
 	if (!a || !b || !c || !d || !e || !f || !g || !h) {
 		printf("allowedips self-test malloc: FAIL\n");
@@ -587,6 +610,7 @@ free:
 	free(f, M_WG);
 	free(g, M_WG);
 	free(h, M_WG);
+	test_aip_deinit(&sc);
 
 	return success;
 }

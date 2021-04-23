@@ -2601,28 +2601,28 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	struct wg_softc *sc;
 	struct ifnet *ifp;
 
-	sc = malloc(sizeof(*sc), M_WG, M_WAITOK | M_ZERO);
+	sc = malloc(sizeof(*sc), M_WG, M_NOWAIT | M_ZERO);
+	if (!sc)
+		goto err_mem;
+	sc->sc_local = noise_local_alloc(sc);
+	if (!sc->sc_local)
+		goto free_sc;
+	if (!rn_inithead((void **)&sc->sc_aip4, offsetof(struct aip_addr, in) * NBBY))
+		goto free_noise_local;
+	if (!rn_inithead((void **)&sc->sc_aip6, offsetof(struct aip_addr, in6) * NBBY))
+		goto free_aip4;
+
 	sc->sc_ucred = crhold(curthread->td_ucred);
 	sc->sc_socket.so_fibnum = curthread->td_proc->p_fibnum;
 	ifp = sc->sc_ifp = if_alloc(IFT_WIREGUARD);
 	ifp->if_softc = sc;
 	if_initname(ifp, wgname, unit);
-
 	TAILQ_INIT(&sc->sc_peers);
 	sc->sc_peers_num = 0;
-
-	if ((sc->sc_local = noise_local_alloc(sc)) == NULL) {
-		free(sc, M_WG);
-		return (ENOMEM);
-	}
-
 	cookie_checker_init(&sc->sc_cookie);
-
 	sc->sc_socket.so_port = 0;
-
 	atomic_add_int(&clone_count, 1);
 	ifp->if_capabilities = ifp->if_capenable = WG_CAPS;
-
 	wg_queue_init(&sc->sc_handshake_queue, "hsq");
 	sx_init(&sc->sc_lock, "wg softc lock");
 	GROUPTASK_INIT(&sc->sc_handshake, 0, (gtask_fn_t *)wg_softc_handshake_receive, sc);
@@ -2630,13 +2630,8 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	crypto_taskq_setup(sc);
 	wg_queue_init(&sc->sc_encrypt_parallel, "encp");
 	wg_queue_init(&sc->sc_decrypt_parallel, "decp");
-
-	/* TODO check rn_inithead return value */
-	rn_inithead((void **)&sc->sc_aip4, offsetof(struct aip_addr, in) * NBBY);
-	rn_inithead((void **)&sc->sc_aip6, offsetof(struct aip_addr, in6) * NBBY);
 	RADIX_NODE_HEAD_LOCK_INIT(sc->sc_aip4);
 	RADIX_NODE_HEAD_LOCK_INIT(sc->sc_aip6);
-
 	if_setmtu(ifp, DEFAULT_MTU);
 	ifp->if_flags = IFF_NOARP | IFF_MULTICAST;
 	ifp->if_init = wg_init;
@@ -2645,19 +2640,25 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	ifp->if_transmit = wg_transmit;
 	ifp->if_output = wg_output;
 	ifp->if_ioctl = wg_ioctl;
-
 	if_attach(ifp);
 	bpfattach(ifp, DLT_NULL, sizeof(uint32_t));
 #ifdef INET6
 	ND_IFINFO(ifp)->flags &= ~ND6_IFF_AUTO_LINKLOCAL;
 	ND_IFINFO(ifp)->flags |= ND6_IFF_NO_DAD;
 #endif
-
 	sx_xlock(&wg_sx);
 	LIST_INSERT_HEAD(&wg_list, sc, sc_entry);
 	sx_xunlock(&wg_sx);
-
 	return (0);
+
+free_aip4:
+	rn_detachhead((void **)&sc->sc_aip4);
+free_noise_local:
+	noise_local_free(sc->sc_local, NULL);
+free_sc:
+	free(sc, M_WG);
+err_mem:
+	return (ENOMEM);
 }
 
 static void
@@ -2714,8 +2715,8 @@ wg_clone_destroy(struct ifnet *ifp)
 
 	RADIX_NODE_HEAD_DESTROY(sc->sc_aip4);
 	RADIX_NODE_HEAD_DESTROY(sc->sc_aip6);
-	free(sc->sc_aip4, M_RTABLE);
-	free(sc->sc_aip6, M_RTABLE);
+	rn_detachhead((void **)&sc->sc_aip4);
+	rn_detachhead((void **)&sc->sc_aip6);
 
 	if (cred != NULL)
 		crfree(cred);

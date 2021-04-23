@@ -175,7 +175,8 @@ noise_local_alloc(void *arg)
 	struct noise_local *l;
 	size_t i;
 
-	if ((l = malloc(sizeof(*l), M_NOISE, M_NOWAIT)) == NULL)
+	l = malloc(sizeof(*l), M_NOISE, M_NOWAIT | M_ZERO);
+	if (!l)
 		return (NULL);
 
 	rw_init(&l->l_identity_lock, "noise_identity");
