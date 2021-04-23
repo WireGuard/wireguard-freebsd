@@ -288,21 +288,14 @@ noise_remote_alloc(struct noise_local *l, void *arg,
 {
 	struct noise_remote *r;
 
-	if ((r = malloc(sizeof(*r), M_NOISE, M_NOWAIT)) == NULL)
+	if ((r = malloc(sizeof(*r), M_NOISE, M_NOWAIT | M_ZERO)) == NULL)
 		return (NULL);
-
-	r->r_index.i_is_keypair = false;
-	r->r_entry_inserted = false;
-
 	memcpy(r->r_public, public, NOISE_PUBLIC_KEY_LEN);
 
 	rw_init(&r->r_handshake_lock, "noise_handshake");
-	bzero(&r->r_handshake, sizeof(r->r_handshake));
 	r->r_handshake_state = HANDSHAKE_DEAD;
 	r->r_last_sent = TIMER_RESET;
 	r->r_last_init_recv = TIMER_RESET;
-	bzero(r->r_timestamp, NOISE_TIMESTAMP_LEN);
-	bzero(r->r_psk, sizeof(r->r_psk));
 	noise_precompute_ss(l, r);
 
 	refcount_init(&r->r_refcnt, 1);
@@ -310,9 +303,6 @@ noise_remote_alloc(struct noise_local *l, void *arg,
 	r->r_arg = arg;
 
 	rw_init(&r->r_keypair_lock, "noise_keypair");
-	r->r_next = r->r_current = r->r_previous = NULL;
-
-	bzero(&r->r_smr, sizeof(r->r_smr));
 
 	return (r);
 }
@@ -650,7 +640,7 @@ noise_begin_session(struct noise_remote *r)
 
 	rw_assert(&r->r_handshake_lock, RA_WLOCKED);
 
-	if ((kp = malloc(sizeof(*kp), M_NOISE, M_NOWAIT)) == NULL)
+	if ((kp = malloc(sizeof(*kp), M_NOISE, M_NOWAIT | M_ZERO)) == NULL)
 		return (ENOSPC);
 
 	refcount_init(&kp->kp_refcnt, 1);
@@ -669,10 +659,6 @@ noise_begin_session(struct noise_remote *r)
 		    r->r_handshake.hs_ck);
 
 	rw_init(&kp->kp_nonce_lock, "noise_nonce");
-	kp->kp_nonce_send = 0;
-	kp->kp_nonce_recv = 0;
-	bzero(kp->kp_backtrack, sizeof(kp->kp_backtrack));
-	bzero(&kp->kp_smr, sizeof(kp->kp_smr));
 
 	noise_add_new_keypair(r->r_local, r, kp);
 	return (0);
