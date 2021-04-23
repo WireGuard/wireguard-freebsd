@@ -4,6 +4,8 @@
  * Copyright (C) 2019-2021 Matt Dunwoodie <ncon@noconroy.net>
  */
 
+#include "opt_inet.h"
+#include "opt_inet6.h"
 #include <sys/types.h>
 #include <sys/systm.h>
 #include <sys/param.h>
