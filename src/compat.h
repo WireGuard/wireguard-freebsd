@@ -67,6 +67,17 @@ static inline void taskqgroup_drain_all(struct taskqgroup *tqg)
 
 #undef atomic_load_ptr
 #define atomic_load_ptr(p) (*(volatile __typeof(*p) *)(p))
+
+static inline void m_snd_tag_rele(struct m_snd_tag *mst)
+{
+	struct ifnet *ifp;
+	if (!mst)
+		return;
+	ifp = mst->ifp;
+	ifp->if_snd_tag_free(mst);
+	if_rele(ifp);
+}
+
 #endif
 
 #if __FreeBSD_version < 1202000
