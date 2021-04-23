@@ -162,11 +162,10 @@ int
 cookie_maker_consume_payload(struct cookie_maker *cp,
     uint8_t nonce[COOKIE_NONCE_SIZE], uint8_t ecookie[COOKIE_ENCRYPTED_SIZE])
 {
-	int ret = 0;
 	uint8_t cookie[COOKIE_COOKIE_SIZE];
+	int ret;
 
-	rw_wlock(&cp->cp_lock);
-
+	rw_rlock(&cp->cp_lock);
 	if (!cp->cp_mac1_valid) {
 		ret = ETIMEDOUT;
 		goto error;
@@ -177,13 +176,18 @@ cookie_maker_consume_payload(struct cookie_maker *cp,
 		ret = EINVAL;
 		goto error;
 	}
+	rw_runlock(&cp->cp_lock);
 
+	rw_wlock(&cp->cp_lock);
 	memcpy(cp->cp_cookie, cookie, COOKIE_COOKIE_SIZE);
-	cp->cp_birthdate = getsbinuptime();
+	cp->cp_cookie_birthdate = getsbinuptime();
+	cp->cp_cookie_valid = true;
 	cp->cp_mac1_valid = false;
-
-error:
 	rw_wunlock(&cp->cp_lock);
+
+	return 0;
+error:
+	rw_runlock(&cp->cp_lock);
 	return ret;
 }
 
@@ -191,25 +195,25 @@ void
 cookie_maker_mac(struct cookie_maker *cp, struct cookie_macs *cm, void *buf,
 		size_t len)
 {
-	rw_rlock(&cp->cp_lock);
-
+	rw_wlock(&cp->cp_lock);
 	cookie_macs_mac1(cm, buf, len, cp->cp_mac1_key);
-
 	memcpy(cp->cp_mac1_last, cm->mac1, COOKIE_MAC_SIZE);
 	cp->cp_mac1_valid = true;
 
-	if (!cookie_timer_expired(cp->cp_birthdate,
-	    COOKIE_SECRET_MAX_AGE - COOKIE_SECRET_LATENCY, 0))
+	if (cp->cp_cookie_valid &&
+	    !cookie_timer_expired(cp->cp_cookie_birthdate,
+	    COOKIE_SECRET_MAX_AGE - COOKIE_SECRET_LATENCY, 0)) {
 		cookie_macs_mac2(cm, buf, len, cp->cp_cookie);
-	else
+	} else {
 		bzero(cm->mac2, COOKIE_MAC_SIZE);
-
-	rw_runlock(&cp->cp_lock);
+		cp->cp_cookie_valid = false;
+	}
+	rw_wunlock(&cp->cp_lock);
 }
 
 int
 cookie_checker_validate_macs(struct cookie_checker *cc, struct cookie_macs *cm,
-		void *buf, size_t len, int busy, struct sockaddr *sa)
+		void *buf, size_t len, bool check_cookie, struct sockaddr *sa)
 {
 	struct cookie_macs our_cm;
 	uint8_t cookie[COOKIE_COOKIE_SIZE];
@@ -223,7 +227,7 @@ cookie_checker_validate_macs(struct cookie_checker *cc, struct cookie_macs *cm,
 	if (timingsafe_bcmp(our_cm.mac1, cm->mac1, COOKIE_MAC_SIZE) != 0)
 		return EINVAL;
 
-	if (busy != 0) {
+	if (check_cookie) {
 		cookie_checker_make_cookie(cc, cookie, sa);
 		cookie_macs_mac2(&our_cm, buf, len, cookie);
 

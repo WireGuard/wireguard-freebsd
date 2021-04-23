@@ -33,8 +33,9 @@ struct cookie_maker {
 	uint8_t		cp_cookie_key[COOKIE_KEY_SIZE];
 
 	struct rwlock	cp_lock;
+	bool		cp_cookie_valid;
 	uint8_t		cp_cookie[COOKIE_COOKIE_SIZE];
-	sbintime_t	cp_birthdate;	/* sbinuptime */
+	sbintime_t	cp_cookie_birthdate;	/* sbinuptime */
 	bool		cp_mac1_valid;
 	uint8_t		cp_mac1_last[COOKIE_MAC_SIZE];
 };
@@ -63,7 +64,7 @@ int	cookie_maker_consume_payload(struct cookie_maker *,
 void	cookie_maker_mac(struct cookie_maker *, struct cookie_macs *,
 	    void *, size_t);
 int	cookie_checker_validate_macs(struct cookie_checker *,
-	    struct cookie_macs *, void *, size_t, int, struct sockaddr *);
+	    struct cookie_macs *, void *, size_t, bool, struct sockaddr *);
 
 #ifdef SELFTESTS
 void	cookie_selftest(void);

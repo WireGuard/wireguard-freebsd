@@ -9,9 +9,6 @@
   permissions in another.)
 - Make code style consistent with one FreeBSD way, rather than a mix of styles.
 - Make sure noise state machine is correct.
-- The cookie logic appears to be broken in unusual ways, in particular right
-  after boot up. Audit and compare all `is_valid` checks, as well as
-  `have_sent_mac1` guards.
 - Investigate whether the allowed ips lookup structure needs reference
   counting.
 - Handle failures of `rn_inithead` and remember to call `rn_detachhead`
