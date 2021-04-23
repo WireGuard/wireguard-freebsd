@@ -2768,21 +2768,19 @@ wg_init(void *xsc)
 static void
 vnet_wg_init(const void *unused __unused)
 {
-
 	V_wg_cloner = if_clone_simple(wgname, wg_clone_create, wg_clone_destroy,
-	    0);
+				      0);
 }
 VNET_SYSINIT(vnet_wg_init, SI_SUB_PROTO_IFATTACHDOMAIN, SI_ORDER_ANY,
-    vnet_wg_init, NULL);
+	     vnet_wg_init, NULL);
 
 static void
 vnet_wg_uninit(const void *unused __unused)
 {
-
 	if_clone_detach(V_wg_cloner);
 }
 VNET_SYSUNINIT(vnet_wg_uninit, SI_SUB_PROTO_IFATTACHDOMAIN, SI_ORDER_ANY,
-    vnet_wg_uninit, NULL);
+	       vnet_wg_uninit, NULL);
 
 static int
 wg_prison_remove(void *obj, void *data __unused)
@@ -2856,16 +2854,12 @@ wg_module_deinit(void)
 static int
 wg_module_event_handler(module_t mod, int what, void *arg)
 {
-
 	switch (what) {
 		case MOD_LOAD:
 			wg_module_init();
 			break;
 		case MOD_UNLOAD:
-			if (atomic_load_int(&clone_count) == 0)
-				wg_module_deinit();
-			else
-				return (EBUSY);
+			wg_module_deinit();
 			break;
 		default:
 			return (EOPNOTSUPP);
