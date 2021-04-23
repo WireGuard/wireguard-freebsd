@@ -396,7 +396,7 @@ static void wg_init(void *);
 static int wg_ioctl(struct ifnet *, u_long, caddr_t);
 static void vnet_wg_init(const void *);
 static void vnet_wg_uninit(const void *);
-static void wg_module_init(void);
+static int wg_module_init(void);
 static void wg_module_deinit(void);
 
 /* TODO Peer */
@@ -2826,20 +2826,27 @@ static void wg_run_selftests(void)
 static inline void wg_run_selftests(void) { }
 #endif
 
-static void
+static int
 wg_module_init(void)
 {
 	osd_method_t methods[PR_MAXMETHOD] = {
 		[PR_METHOD_REMOVE] = wg_prison_remove,
 	};
 
-	wg_packet_zone = uma_zcreate("wg packet", sizeof(struct wg_packet),
-	     NULL, NULL, NULL, NULL, 0, 0);
+	if ((wg_packet_zone = uma_zcreate("wg packet", sizeof(struct wg_packet),
+	     NULL, NULL, NULL, NULL, 0, 0)) == NULL)
+		goto free_none;
+	if (cookie_init() != 0)
+		goto free_zone;
+
 	wg_osd_jail_slot = osd_jail_register(NULL, methods);
-
-	cookie_init();
-
 	wg_run_selftests();
+	return (0);
+
+free_zone:
+	uma_zdestroy(wg_packet_zone);
+free_none:
+	return (ENOMEM);
 }
 
 static void
@@ -2858,8 +2865,7 @@ wg_module_event_handler(module_t mod, int what, void *arg)
 {
 	switch (what) {
 		case MOD_LOAD:
-			wg_module_init();
-			break;
+			return wg_module_init();
 		case MOD_UNLOAD:
 			wg_module_deinit();
 			break;
