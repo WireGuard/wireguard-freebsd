@@ -54,14 +54,14 @@ struct ratelimit {
 	size_t				 rl_table_num;
 };
 
-static void	cookie_precompute_key(uint8_t *,
+static void	precompute_key(uint8_t *,
 			const uint8_t[COOKIE_INPUT_SIZE], const char *);
-static void	cookie_macs_mac1(struct cookie_macs *, const void *, size_t,
+static void	macs_mac1(struct cookie_macs *, const void *, size_t,
 			const uint8_t[COOKIE_KEY_SIZE]);
-static void	cookie_macs_mac2(struct cookie_macs *, const void *, size_t,
+static void	macs_mac2(struct cookie_macs *, const void *, size_t,
 			const uint8_t[COOKIE_COOKIE_SIZE]);
-static int	cookie_timer_expired(sbintime_t, uint32_t, uint32_t);
-static void	cookie_checker_make_cookie(struct cookie_checker *,
+static int	timer_expired(sbintime_t, uint32_t, uint32_t);
+static void	make_cookie(struct cookie_checker *,
 			uint8_t[COOKIE_COOKIE_SIZE], struct sockaddr *);
 static int	ratelimit_init(struct ratelimit *);
 static void	ratelimit_deinit(struct ratelimit *);
@@ -122,8 +122,8 @@ cookie_checker_update(struct cookie_checker *cc,
 {
 	rw_wlock(&cc->cc_key_lock);
 	if (key) {
-		cookie_precompute_key(cc->cc_mac1_key, key, COOKIE_MAC1_KEY_LABEL);
-		cookie_precompute_key(cc->cc_cookie_key, key, COOKIE_COOKIE_KEY_LABEL);
+		precompute_key(cc->cc_mac1_key, key, COOKIE_MAC1_KEY_LABEL);
+		precompute_key(cc->cc_cookie_key, key, COOKIE_COOKIE_KEY_LABEL);
 	} else {
 		bzero(cc->cc_mac1_key, sizeof(cc->cc_mac1_key));
 		bzero(cc->cc_cookie_key, sizeof(cc->cc_cookie_key));
@@ -133,106 +133,106 @@ cookie_checker_update(struct cookie_checker *cc,
 
 void
 cookie_checker_create_payload(struct cookie_checker *cc,
-    struct cookie_macs *cm, uint8_t nonce[COOKIE_NONCE_SIZE],
+    struct cookie_macs *macs, uint8_t nonce[COOKIE_NONCE_SIZE],
     uint8_t ecookie[COOKIE_ENCRYPTED_SIZE], struct sockaddr *sa)
 {
 	uint8_t cookie[COOKIE_COOKIE_SIZE];
 
-	cookie_checker_make_cookie(cc, cookie, sa);
+	make_cookie(cc, cookie, sa);
 	arc4random_buf(nonce, COOKIE_NONCE_SIZE);
 
 	rw_rlock(&cc->cc_key_lock);
 	xchacha20poly1305_encrypt(ecookie, cookie, COOKIE_COOKIE_SIZE,
-	    cm->mac1, COOKIE_MAC_SIZE, nonce, cc->cc_cookie_key);
+	    macs->mac1, COOKIE_MAC_SIZE, nonce, cc->cc_cookie_key);
 	rw_runlock(&cc->cc_key_lock);
 
 	explicit_bzero(cookie, sizeof(cookie));
 }
 
 void
-cookie_maker_init(struct cookie_maker *cp, const uint8_t key[COOKIE_INPUT_SIZE])
+cookie_maker_init(struct cookie_maker *cm, const uint8_t key[COOKIE_INPUT_SIZE])
 {
-	bzero(cp, sizeof(*cp));
-	cookie_precompute_key(cp->cp_mac1_key, key, COOKIE_MAC1_KEY_LABEL);
-	cookie_precompute_key(cp->cp_cookie_key, key, COOKIE_COOKIE_KEY_LABEL);
-	rw_init(&cp->cp_lock, "cookie_maker");
+	bzero(cm, sizeof(*cm));
+	precompute_key(cm->cm_mac1_key, key, COOKIE_MAC1_KEY_LABEL);
+	precompute_key(cm->cm_cookie_key, key, COOKIE_COOKIE_KEY_LABEL);
+	rw_init(&cm->cm_lock, "cookie_maker");
 }
 
 int
-cookie_maker_consume_payload(struct cookie_maker *cp,
+cookie_maker_consume_payload(struct cookie_maker *cm,
     uint8_t nonce[COOKIE_NONCE_SIZE], uint8_t ecookie[COOKIE_ENCRYPTED_SIZE])
 {
 	uint8_t cookie[COOKIE_COOKIE_SIZE];
 	int ret;
 
-	rw_rlock(&cp->cp_lock);
-	if (!cp->cp_mac1_valid) {
+	rw_rlock(&cm->cm_lock);
+	if (!cm->cm_mac1_sent) {
 		ret = ETIMEDOUT;
 		goto error;
 	}
 
-	if (xchacha20poly1305_decrypt(cookie, ecookie, COOKIE_ENCRYPTED_SIZE,
-	    cp->cp_mac1_last, COOKIE_MAC_SIZE, nonce, cp->cp_cookie_key) == 0) {
+	if (!xchacha20poly1305_decrypt(cookie, ecookie, COOKIE_ENCRYPTED_SIZE,
+	    cm->cm_mac1_last, COOKIE_MAC_SIZE, nonce, cm->cm_cookie_key)) {
 		ret = EINVAL;
 		goto error;
 	}
-	rw_runlock(&cp->cp_lock);
+	rw_runlock(&cm->cm_lock);
 
-	rw_wlock(&cp->cp_lock);
-	memcpy(cp->cp_cookie, cookie, COOKIE_COOKIE_SIZE);
-	cp->cp_cookie_birthdate = getsbinuptime();
-	cp->cp_cookie_valid = true;
-	cp->cp_mac1_valid = false;
-	rw_wunlock(&cp->cp_lock);
+	rw_wlock(&cm->cm_lock);
+	memcpy(cm->cm_cookie, cookie, COOKIE_COOKIE_SIZE);
+	cm->cm_cookie_birthdate = getsbinuptime();
+	cm->cm_cookie_valid = true;
+	cm->cm_mac1_sent = false;
+	rw_wunlock(&cm->cm_lock);
 
 	return 0;
 error:
-	rw_runlock(&cp->cp_lock);
+	rw_runlock(&cm->cm_lock);
 	return ret;
 }
 
 void
-cookie_maker_mac(struct cookie_maker *cp, struct cookie_macs *cm, void *buf,
-		size_t len)
+cookie_maker_mac(struct cookie_maker *cm, struct cookie_macs *macs, void *buf,
+    size_t len)
 {
-	rw_wlock(&cp->cp_lock);
-	cookie_macs_mac1(cm, buf, len, cp->cp_mac1_key);
-	memcpy(cp->cp_mac1_last, cm->mac1, COOKIE_MAC_SIZE);
-	cp->cp_mac1_valid = true;
+	rw_wlock(&cm->cm_lock);
+	macs_mac1(macs, buf, len, cm->cm_mac1_key);
+	memcpy(cm->cm_mac1_last, macs->mac1, COOKIE_MAC_SIZE);
+	cm->cm_mac1_sent = true;
 
-	if (cp->cp_cookie_valid &&
-	    !cookie_timer_expired(cp->cp_cookie_birthdate,
+	if (cm->cm_cookie_valid &&
+	    !timer_expired(cm->cm_cookie_birthdate,
 	    COOKIE_SECRET_MAX_AGE - COOKIE_SECRET_LATENCY, 0)) {
-		cookie_macs_mac2(cm, buf, len, cp->cp_cookie);
+		macs_mac2(macs, buf, len, cm->cm_cookie);
 	} else {
-		bzero(cm->mac2, COOKIE_MAC_SIZE);
-		cp->cp_cookie_valid = false;
+		bzero(macs->mac2, COOKIE_MAC_SIZE);
+		cm->cm_cookie_valid = false;
 	}
-	rw_wunlock(&cp->cp_lock);
+	rw_wunlock(&cm->cm_lock);
 }
 
 int
-cookie_checker_validate_macs(struct cookie_checker *cc, struct cookie_macs *cm,
-		void *buf, size_t len, bool check_cookie, struct sockaddr *sa)
+cookie_checker_validate_macs(struct cookie_checker *cc, struct cookie_macs *macs,
+    void *buf, size_t len, bool check_cookie, struct sockaddr *sa)
 {
-	struct cookie_macs our_cm;
+	struct cookie_macs our_macs;
 	uint8_t cookie[COOKIE_COOKIE_SIZE];
 
 	/* Validate incoming MACs */
 	rw_rlock(&cc->cc_key_lock);
-	cookie_macs_mac1(&our_cm, buf, len, cc->cc_mac1_key);
+	macs_mac1(&our_macs, buf, len, cc->cc_mac1_key);
 	rw_runlock(&cc->cc_key_lock);
 
 	/* If mac1 is invald, we want to drop the packet */
-	if (timingsafe_bcmp(our_cm.mac1, cm->mac1, COOKIE_MAC_SIZE) != 0)
+	if (timingsafe_bcmp(our_macs.mac1, macs->mac1, COOKIE_MAC_SIZE) != 0)
 		return EINVAL;
 
 	if (check_cookie) {
-		cookie_checker_make_cookie(cc, cookie, sa);
-		cookie_macs_mac2(&our_cm, buf, len, cookie);
+		make_cookie(cc, cookie, sa);
+		macs_mac2(&our_macs, buf, len, cookie);
 
 		/* If the mac2 is invalid, we want to send a cookie response */
-		if (timingsafe_bcmp(our_cm.mac2, cm->mac2, COOKIE_MAC_SIZE) != 0)
+		if (timingsafe_bcmp(our_macs.mac2, macs->mac2, COOKIE_MAC_SIZE) != 0)
 			return EAGAIN;
 
 		/* If the mac2 is valid, we may want rate limit the peer.
@@ -248,60 +248,58 @@ cookie_checker_validate_macs(struct cookie_checker *cc, struct cookie_macs *cm,
 		else
 			return EAFNOSUPPORT;
 	}
+
 	return 0;
 }
 
 /* Private functions */
 static void
-cookie_precompute_key(uint8_t *key, const uint8_t input[COOKIE_INPUT_SIZE],
+precompute_key(uint8_t *key, const uint8_t input[COOKIE_INPUT_SIZE],
     const char *label)
 {
 	struct blake2s_state blake;
-
 	blake2s_init(&blake, COOKIE_KEY_SIZE);
 	blake2s_update(&blake, label, strlen(label));
 	blake2s_update(&blake, input, COOKIE_INPUT_SIZE);
-	/* TODO we shouldn't need to provide outlen to _final. we can align
-	 * this with openbsd after fixing the blake library. */
 	blake2s_final(&blake, key);
 }
 
 static void
-cookie_macs_mac1(struct cookie_macs *cm, const void *buf, size_t len,
+macs_mac1(struct cookie_macs *macs, const void *buf, size_t len,
     const uint8_t key[COOKIE_KEY_SIZE])
 {
 	struct blake2s_state state;
 	blake2s_init_key(&state, COOKIE_MAC_SIZE, key, COOKIE_KEY_SIZE);
 	blake2s_update(&state, buf, len);
-	blake2s_final(&state, cm->mac1);
+	blake2s_final(&state, macs->mac1);
 }
 
 static void
-cookie_macs_mac2(struct cookie_macs *cm, const void *buf, size_t len,
-		const uint8_t key[COOKIE_COOKIE_SIZE])
+macs_mac2(struct cookie_macs *macs, const void *buf, size_t len,
+    const uint8_t key[COOKIE_COOKIE_SIZE])
 {
 	struct blake2s_state state;
 	blake2s_init_key(&state, COOKIE_MAC_SIZE, key, COOKIE_COOKIE_SIZE);
 	blake2s_update(&state, buf, len);
-	blake2s_update(&state, cm->mac1, COOKIE_MAC_SIZE);
-	blake2s_final(&state, cm->mac2);
+	blake2s_update(&state, macs->mac1, COOKIE_MAC_SIZE);
+	blake2s_final(&state, macs->mac2);
 }
 
 static __inline int
-cookie_timer_expired(sbintime_t timer, uint32_t sec, uint32_t nsec)
+timer_expired(sbintime_t timer, uint32_t sec, uint32_t nsec)
 {
 	sbintime_t now = getsbinuptime();
 	return (now > (timer + sec * SBT_1S + nstosbt(nsec))) ? ETIMEDOUT : 0;
 }
 
 static void
-cookie_checker_make_cookie(struct cookie_checker *cc,
-		uint8_t cookie[COOKIE_COOKIE_SIZE], struct sockaddr *sa)
+make_cookie(struct cookie_checker *cc, uint8_t cookie[COOKIE_COOKIE_SIZE],
+    struct sockaddr *sa)
 {
 	struct blake2s_state state;
 
 	rw_wlock(&cc->cc_secret_lock);
-	if (cookie_timer_expired(cc->cc_secret_birthdate,
+	if (timer_expired(cc->cc_secret_birthdate,
 	    COOKIE_SECRET_MAX_AGE, 0)) {
 		arc4random_buf(cc->cc_secret, COOKIE_SECRET_SIZE);
 		cc->cc_secret_birthdate = getsbinuptime();

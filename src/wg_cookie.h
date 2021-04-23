@@ -29,15 +29,15 @@ struct cookie_macs {
 };
 
 struct cookie_maker {
-	uint8_t		cp_mac1_key[COOKIE_KEY_SIZE];
-	uint8_t		cp_cookie_key[COOKIE_KEY_SIZE];
+	uint8_t		cm_mac1_key[COOKIE_KEY_SIZE];
+	uint8_t		cm_cookie_key[COOKIE_KEY_SIZE];
 
-	struct rwlock	cp_lock;
-	bool		cp_cookie_valid;
-	uint8_t		cp_cookie[COOKIE_COOKIE_SIZE];
-	sbintime_t	cp_cookie_birthdate;	/* sbinuptime */
-	bool		cp_mac1_valid;
-	uint8_t		cp_mac1_last[COOKIE_MAC_SIZE];
+	struct rwlock	cm_lock;
+	bool		cm_cookie_valid;
+	uint8_t		cm_cookie[COOKIE_COOKIE_SIZE];
+	sbintime_t	cm_cookie_birthdate;	/* sbinuptime */
+	bool		cm_mac1_sent;
+	uint8_t		cm_mac1_last[COOKIE_MAC_SIZE];
 };
 
 struct cookie_checker {
