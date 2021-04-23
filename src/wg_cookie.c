@@ -9,7 +9,6 @@
 #include <sys/param.h>
 #include <sys/lock.h>
 #include <sys/rwlock.h>
-#include <sys/malloc.h> /* Because systm doesn't include M_NOWAIT, M_DEVBUF */
 #include <sys/socket.h>
 
 #include "support.h"
@@ -22,6 +21,7 @@
 
 /* Constants for initiation rate limiting */
 #define RATELIMIT_SIZE		(1 << 13)
+#define RATELIMIT_MASK		(RATELIMIT_SIZE - 1)
 #define RATELIMIT_SIZE_MAX	(RATELIMIT_SIZE * 8)
 #define INITIATIONS_PER_SECOND	20
 #define INITIATIONS_BURSTABLE	5
@@ -32,26 +32,25 @@
 #define IPV6_MASK_SIZE		8 /* Use top 8 bytes (/64) of IPv6 address */
 
 struct ratelimit_entry {
-	LIST_ENTRY(ratelimit_entry)	 r_entry;
-	sa_family_t			 r_af;
+	LIST_ENTRY(ratelimit_entry)	r_entry;
+	sa_family_t			r_af;
 	union {
-		struct in_addr		 r_in;
+		struct in_addr		r_in;
 #ifdef INET6
-		struct in6_addr		 r_in6;
+		struct in6_addr		r_in6;
 #endif
 	};
-	sbintime_t			 r_last_time;	/* sbinuptime */
-	uint64_t			 r_tokens;
+	sbintime_t			r_last_time;	/* sbinuptime */
+	uint64_t			r_tokens;
 };
 
 struct ratelimit {
-	uint8_t				 rl_secret[SIPHASH_KEY_LENGTH];
+	uint8_t				rl_secret[SIPHASH_KEY_LENGTH];
 
-	struct rwlock			 rl_lock;
-	struct callout			 rl_gc;
-	LIST_HEAD(, ratelimit_entry)	*rl_table;
-	u_long				 rl_table_mask;
-	size_t				 rl_table_num;
+	struct rwlock			rl_lock;
+	struct callout			rl_gc;
+	LIST_HEAD(, ratelimit_entry)	rl_table[RATELIMIT_SIZE];
+	size_t				rl_table_num;
 };
 
 static void	precompute_key(uint8_t *,
@@ -63,7 +62,7 @@ static void	macs_mac2(struct cookie_macs *, const void *, size_t,
 static int	timer_expired(sbintime_t, uint32_t, uint32_t);
 static void	make_cookie(struct cookie_checker *,
 			uint8_t[COOKIE_COOKIE_SIZE], struct sockaddr *);
-static int	ratelimit_init(struct ratelimit *);
+static void	ratelimit_init(struct ratelimit *);
 static void	ratelimit_deinit(struct ratelimit *);
 static void	ratelimit_gc_callout(void *);
 static void	ratelimit_gc_schedule(struct ratelimit *);
@@ -81,18 +80,13 @@ static uma_zone_t ratelimit_zone;
 int
 cookie_init(void)
 {
-	int res;
+	if ((ratelimit_zone = uma_zcreate("wg ratelimit",
+	    sizeof(struct ratelimit_entry), NULL, NULL, NULL, NULL, 0, 0)) == NULL)
+		return ENOMEM;
 
-	ratelimit_zone = uma_zcreate("wg ratelimit", sizeof(struct ratelimit),
-	     NULL, NULL, NULL, NULL, 0, 0);
-
-	if ((res = ratelimit_init(&ratelimit_v4)) != 0)
-		return res;
+	ratelimit_init(&ratelimit_v4);
 #ifdef INET6
-	if ((res = ratelimit_init(&ratelimit_v6)) != 0) {
-		ratelimit_deinit(&ratelimit_v4);
-		return res;
-	}
+	ratelimit_init(&ratelimit_v6)
 #endif
 	return 0;
 }
@@ -327,16 +321,16 @@ make_cookie(struct cookie_checker *cc, uint8_t cookie[COOKIE_COOKIE_SIZE],
 	}
 }
 
-static int
+static void
 ratelimit_init(struct ratelimit *rl)
 {
+	size_t i;
 	rw_init(&rl->rl_lock, "ratelimit_lock");
 	callout_init_rw(&rl->rl_gc, &rl->rl_lock, 0);
 	arc4random_buf(rl->rl_secret, sizeof(rl->rl_secret));
-	rl->rl_table = hashinit_flags(RATELIMIT_SIZE, M_DEVBUF,
-	    &rl->rl_table_mask, M_NOWAIT);
+	for (i = 0; i < RATELIMIT_SIZE; i++)
+		LIST_INIT(&rl->rl_table[i]);
 	rl->rl_table_num = 0;
-	return rl->rl_table == NULL ? ENOBUFS : 0;
 }
 
 static void
@@ -345,7 +339,6 @@ ratelimit_deinit(struct ratelimit *rl)
 	rw_wlock(&rl->rl_lock);
 	callout_stop(&rl->rl_gc);
 	ratelimit_gc(rl, true);
-	hashdestroy(rl->rl_table, M_DEVBUF, rl->rl_table_mask);
 	rw_wunlock(&rl->rl_lock);
 }
 
@@ -418,7 +411,7 @@ ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa)
 
 	rw_wlock(&rl->rl_lock);
 
-	LIST_FOREACH(r, &rl->rl_table[key & rl->rl_table_mask], r_entry) {
+	LIST_FOREACH(r, &rl->rl_table[key & RATELIMIT_MASK], r_entry) {
 		if (r->r_af != sa->sa_family)
 			continue;
 
@@ -469,7 +462,7 @@ ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa)
 	rl->rl_table_num++;
 
 	/* Insert entry into the hashtable and ensure it's initialised */
-	LIST_INSERT_HEAD(&rl->rl_table[key & rl->rl_table_mask], r, r_entry);
+	LIST_INSERT_HEAD(&rl->rl_table[key & RATELIMIT_MASK], r, r_entry);
 	r->r_af = sa->sa_family;
 	if (r->r_af == AF_INET)
 		memcpy(&r->r_in, &satosin(sa)->sin_addr, IPV4_MASK_SIZE);

@@ -28,10 +28,11 @@ static const struct expected_results {
 	[INITIATIONS_BURSTABLE + 5] = { ECONNREFUSED, 0 }
 };
 
+static struct ratelimit rl;
+
 static void
 cookie_ratelimit_timings_test(void)
 {
-	struct ratelimit rl;
 	struct sockaddr_in sin;
 #ifdef INET6
 	struct sockaddr_in6 sin6;
@@ -96,7 +97,6 @@ cleanup:
 static void
 cookie_ratelimit_capacity_test(void)
 {
-	struct ratelimit rl;
 	struct sockaddr_in sin;
 	int i;
 
@@ -125,7 +125,6 @@ cleanup:
 static void
 cookie_ratelimit_gc_test(void)
 {
-	struct ratelimit rl;
 	struct sockaddr_in sin;
 	int i;
 
