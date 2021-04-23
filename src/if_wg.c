@@ -1288,7 +1288,8 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 
 		res = cookie_checker_validate_macs(&sc->sc_cookie, &init->m,
 				init, sizeof(*init) - sizeof(init->m),
-				underload, &e->e_remote.r_sa);
+				underload, &e->e_remote.r_sa,
+				sc->sc_ifp->if_vnet);
 
 		if (res == EINVAL) {
 			DPRINTF(sc, "Invalid initiation MAC\n");
@@ -1321,7 +1322,8 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 
 		res = cookie_checker_validate_macs(&sc->sc_cookie, &resp->m,
 				resp, sizeof(*resp) - sizeof(resp->m),
-				underload, &e->e_remote.r_sa);
+				underload, &e->e_remote.r_sa,
+				sc->sc_ifp->if_vnet);
 
 		if (res == EINVAL) {
 			DPRINTF(sc, "Invalid response MAC\n");

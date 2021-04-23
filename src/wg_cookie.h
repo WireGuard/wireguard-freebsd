@@ -64,7 +64,8 @@ int	cookie_maker_consume_payload(struct cookie_maker *,
 void	cookie_maker_mac(struct cookie_maker *, struct cookie_macs *,
 	    void *, size_t);
 int	cookie_checker_validate_macs(struct cookie_checker *,
-	    struct cookie_macs *, void *, size_t, bool, struct sockaddr *);
+	    struct cookie_macs *, void *, size_t, bool, struct sockaddr *,
+	    struct vnet *);
 
 #ifdef SELFTESTS
 void	cookie_selftest(void);

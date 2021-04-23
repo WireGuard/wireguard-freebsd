@@ -11,10 +11,7 @@
 - Make sure noise state machine is correct.
 - Investigate whether the allowed ips lookup structure needs reference
   counting.
-- Handle failures of `rn_inithead` and remember to call `rn_detachhead`
-  somewhere during cleanup.
 - Stop using `M_WAITOK` and use `M_NOWAIT` instead.
-- Hash in jail/fib pointer to ratelimiter.
 
 ### Crypto TODO
 
