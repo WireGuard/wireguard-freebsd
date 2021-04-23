@@ -11,7 +11,7 @@
 } while (0)
 #define T(num, v, e) do {						\
 	if (noise_keypair_nonce_check(&kp, v) != e) {			\
-		printf("%s, test %d: fail\n", __func__, num);	\
+		printf("%s, test %d: FAIL\n", __func__, num);	\
 		return;							\
 	}								\
 } while (0)

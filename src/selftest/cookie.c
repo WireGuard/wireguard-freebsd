@@ -6,11 +6,11 @@
 
 #define MESSAGE_LEN 64
 #define T_FAILED_ITER(test) do {				\
-	printf("%s %s: fail, iter: %d\n", __func__, test, i);	\
+	printf("%s %s: FAIL, iter: %d\n", __func__, test, i);	\
 	goto cleanup;						\
 } while (0)
 #define T_FAILED(test) do {				\
-	printf("%s %s: fail\n", __func__, test);	\
+	printf("%s %s: FAIL\n", __func__, test);	\
 	goto cleanup;					\
 } while (0)
 #define T_PASSED printf("%s: pass\n", __func__)
@@ -160,7 +160,7 @@ cookie_ratelimit_gc_test(void)
 	tsleep_sbt(&rl, PWAIT, "rl", ELEMENT_TIMEOUT * SBT_1S * 2 , 0, 0);
 
 	if (rl.rl_table_num != 0)
-		T_FAILED("gc failed");
+		T_FAILED("gc");
 	T_PASSED;
 cleanup:
 	ratelimit_deinit(&rl);
