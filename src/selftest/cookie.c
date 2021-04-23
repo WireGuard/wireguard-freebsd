@@ -29,7 +29,7 @@ static const struct expected_results {
 };
 
 static void
-cookie_ratelimit_timings_test(uma_zone_t zone)
+cookie_ratelimit_timings_test(void)
 {
 	struct ratelimit rl;
 	struct sockaddr_in sin;
@@ -38,7 +38,7 @@ cookie_ratelimit_timings_test(uma_zone_t zone)
 #endif
 	int i;
 
-	ratelimit_init(&rl, zone);
+	ratelimit_init(&rl);
 
 	sin.sin_family = AF_INET;
 #ifdef INET6
@@ -94,13 +94,13 @@ cleanup:
 }
 
 static void
-cookie_ratelimit_capacity_test(uma_zone_t zone)
+cookie_ratelimit_capacity_test(void)
 {
 	struct ratelimit rl;
 	struct sockaddr_in sin;
 	int i;
 
-	ratelimit_init(&rl, zone);
+	ratelimit_init(&rl);
 
 	sin.sin_family = AF_INET;
 	sin.sin_port = 1234;
@@ -123,13 +123,13 @@ cleanup:
 }
 
 static void
-cookie_ratelimit_gc_test(uma_zone_t zone)
+cookie_ratelimit_gc_test(void)
 {
 	struct ratelimit rl;
 	struct sockaddr_in sin;
 	int i;
 
-	ratelimit_init(&rl, zone);
+	ratelimit_init(&rl);
 
 	sin.sin_family = AF_INET;
 	sin.sin_port = 1234;
@@ -168,7 +168,7 @@ cleanup:
 }
 
 static void
-cookie_mac_test(uma_zone_t zone)
+cookie_mac_test(void)
 {
 	struct cookie_checker checker;
 	struct cookie_maker maker;
@@ -187,8 +187,7 @@ cookie_mac_test(uma_zone_t zone)
 	/* Init cookie_maker. */
 	cookie_maker_init(&maker, shared);
 
-	if (cookie_checker_init(&checker, zone) != 0)
-		T_FAILED("cookie_checker_allocate");
+	cookie_checker_init(&checker);
 	cookie_checker_update(&checker, shared);
 
 	/* Create dummy sockaddr */
@@ -280,21 +279,14 @@ cookie_mac_test(uma_zone_t zone)
 
 	T_PASSED;
 cleanup:
-	cookie_checker_deinit(&checker);
+	return;
 }
 
 void
 cookie_selftest(void)
 {
-	uma_zone_t rl_zone;
-
-	rl_zone = uma_zcreate("cookie test", sizeof(struct ratelimit),
-	    NULL, NULL, NULL, NULL, 0, 0);
-
-	cookie_ratelimit_timings_test(rl_zone);
-	cookie_ratelimit_capacity_test(rl_zone);
-	cookie_ratelimit_gc_test(rl_zone);
-	cookie_mac_test(rl_zone);
-
-	uma_zdestroy(rl_zone);
+	cookie_ratelimit_timings_test();
+	cookie_ratelimit_capacity_test();
+	cookie_ratelimit_gc_test();
+	cookie_mac_test();
 }

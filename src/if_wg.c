@@ -287,7 +287,6 @@ struct wg_softc {
 
 static int clone_count;
 static uma_zone_t wg_packet_zone;
-static uma_zone_t ratelimit_zone;
 static volatile unsigned long peer_counter = 0;
 static const char wgname[] = "wg";
 static unsigned wg_osd_jail_slot;
@@ -2617,8 +2616,7 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 		return (ENOMEM);
 	}
 
-	/* TODO check checker_init return value */
-	cookie_checker_init(&sc->sc_cookie, ratelimit_zone);
+	cookie_checker_init(&sc->sc_cookie);
 
 	sc->sc_socket.so_port = 0;
 
@@ -2834,9 +2832,9 @@ wg_module_init(void)
 
 	wg_packet_zone = uma_zcreate("wg packet", sizeof(struct wg_packet),
 	     NULL, NULL, NULL, NULL, 0, 0);
-	ratelimit_zone = uma_zcreate("wg ratelimit", sizeof(struct ratelimit),
-	     NULL, NULL, NULL, NULL, 0, 0);
 	wg_osd_jail_slot = osd_jail_register(NULL, methods);
+
+	cookie_init();
 
 	wg_run_selftests();
 }
@@ -2846,8 +2844,8 @@ wg_module_deinit(void)
 {
 
 	uma_zdestroy(wg_packet_zone);
-	uma_zdestroy(ratelimit_zone);
 	osd_jail_deregister(wg_osd_jail_slot);
+	cookie_deinit();
 
 	MPASS(LIST_EMPTY(&wg_list));
 }

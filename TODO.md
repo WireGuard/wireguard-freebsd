@@ -17,10 +17,9 @@
 - Handle failures of `rn_inithead` and remember to call `rn_detachhead`
   somewhere during cleanup.
 - Stop using `M_WAITOK` and use `M_NOWAIT` instead.
-- Make sure ratelimiter is empty and deinited.
 - Check return value of `rn_inithead`.
 - Perhaps call `rn_detachhead` to free memory when destroying aip.
-- Have one rate limiter table per module, and hash in jail/fib pointer.
+- Hash in jail/fib pointer to ratelimiter.
 
 ### Crypto TODO
 

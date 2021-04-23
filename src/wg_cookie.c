@@ -15,6 +15,45 @@
 #include "support.h"
 #include "wg_cookie.h"
 
+#define COOKIE_MAC1_KEY_LABEL	"mac1----"
+#define COOKIE_COOKIE_KEY_LABEL	"cookie--"
+#define COOKIE_SECRET_MAX_AGE	120
+#define COOKIE_SECRET_LATENCY	5
+
+/* Constants for initiation rate limiting */
+#define RATELIMIT_SIZE		(1 << 13)
+#define RATELIMIT_SIZE_MAX	(RATELIMIT_SIZE * 8)
+#define INITIATIONS_PER_SECOND	20
+#define INITIATIONS_BURSTABLE	5
+#define INITIATION_COST		(SBT_1S / INITIATIONS_PER_SECOND)
+#define TOKEN_MAX		(INITIATION_COST * INITIATIONS_BURSTABLE)
+#define ELEMENT_TIMEOUT		1
+#define IPV4_MASK_SIZE		4 /* Use all 4 bytes of IPv4 address */
+#define IPV6_MASK_SIZE		8 /* Use top 8 bytes (/64) of IPv6 address */
+
+struct ratelimit_entry {
+	LIST_ENTRY(ratelimit_entry)	 r_entry;
+	sa_family_t			 r_af;
+	union {
+		struct in_addr		 r_in;
+#ifdef INET6
+		struct in6_addr		 r_in6;
+#endif
+	};
+	sbintime_t			 r_last_time;	/* sbinuptime */
+	uint64_t			 r_tokens;
+};
+
+struct ratelimit {
+	uint8_t				 rl_secret[SIPHASH_KEY_LENGTH];
+
+	struct rwlock			 rl_lock;
+	struct callout			 rl_gc;
+	LIST_HEAD(, ratelimit_entry)	*rl_table;
+	u_long				 rl_table_mask;
+	size_t				 rl_table_num;
+};
+
 static void	cookie_precompute_key(uint8_t *,
 			const uint8_t[COOKIE_INPUT_SIZE], const char *);
 static void	cookie_macs_mac1(struct cookie_macs *, const void *, size_t,
@@ -24,7 +63,7 @@ static void	cookie_macs_mac2(struct cookie_macs *, const void *, size_t,
 static int	cookie_timer_expired(sbintime_t, uint32_t, uint32_t);
 static void	cookie_checker_make_cookie(struct cookie_checker *,
 			uint8_t[COOKIE_COOKIE_SIZE], struct sockaddr *);
-static int	ratelimit_init(struct ratelimit *, uma_zone_t);
+static int	ratelimit_init(struct ratelimit *);
 static void	ratelimit_deinit(struct ratelimit *);
 static void	ratelimit_gc_callout(void *);
 static void	ratelimit_gc_schedule(struct ratelimit *);
@@ -32,34 +71,49 @@ static void	ratelimit_gc(struct ratelimit *, bool);
 static int	ratelimit_allow(struct ratelimit *, struct sockaddr *);
 static uint64_t siphash13(const uint8_t [SIPHASH_KEY_LENGTH], const void *, size_t);
 
-/* Public Functions */
-void
-cookie_maker_init(struct cookie_maker *cp, const uint8_t key[COOKIE_INPUT_SIZE])
-{
-	bzero(cp, sizeof(*cp));
-	cookie_precompute_key(cp->cp_mac1_key, key, COOKIE_MAC1_KEY_LABEL);
-	cookie_precompute_key(cp->cp_cookie_key, key, COOKIE_COOKIE_KEY_LABEL);
-	rw_init(&cp->cp_lock, "cookie_maker");
-}
+static struct ratelimit ratelimit_v4;
+#ifdef INET6
+static struct ratelimit ratelimit_v6;
+#endif
+static uma_zone_t ratelimit_zone;
 
+/* Public Functions */
 int
-cookie_checker_init(struct cookie_checker *cc, uma_zone_t zone)
+cookie_init(void)
 {
 	int res;
-	bzero(cc, sizeof(*cc));
 
-	rw_init(&cc->cc_key_lock, "cookie_checker_key");
-	rw_init(&cc->cc_secret_lock, "cookie_checker_secret");
+	ratelimit_zone = uma_zcreate("wg ratelimit", sizeof(struct ratelimit),
+	     NULL, NULL, NULL, NULL, 0, 0);
 
-	if ((res = ratelimit_init(&cc->cc_ratelimit_v4, zone)) != 0)
+	if ((res = ratelimit_init(&ratelimit_v4)) != 0)
 		return res;
 #ifdef INET6
-	if ((res = ratelimit_init(&cc->cc_ratelimit_v6, zone)) != 0) {
-		ratelimit_deinit(&cc->cc_ratelimit_v4);
+	if ((res = ratelimit_init(&ratelimit_v6)) != 0) {
+		ratelimit_deinit(&ratelimit_v4);
 		return res;
 	}
 #endif
 	return 0;
+}
+
+void
+cookie_deinit(void)
+{
+	uma_zdestroy(ratelimit_zone);
+	ratelimit_deinit(&ratelimit_v4);
+#ifdef INET6
+	ratelimit_deinit(&ratelimit_v6);
+#endif
+}
+
+void
+cookie_checker_init(struct cookie_checker *cc)
+{
+	bzero(cc, sizeof(*cc));
+
+	rw_init(&cc->cc_key_lock, "cookie_checker_key");
+	rw_init(&cc->cc_secret_lock, "cookie_checker_secret");
 }
 
 void
@@ -78,15 +132,6 @@ cookie_checker_update(struct cookie_checker *cc,
 }
 
 void
-cookie_checker_deinit(struct cookie_checker *cc)
-{
-	ratelimit_deinit(&cc->cc_ratelimit_v4);
-#ifdef INET6
-	ratelimit_deinit(&cc->cc_ratelimit_v6);
-#endif
-}
-
-void
 cookie_checker_create_payload(struct cookie_checker *cc,
     struct cookie_macs *cm, uint8_t nonce[COOKIE_NONCE_SIZE],
     uint8_t ecookie[COOKIE_ENCRYPTED_SIZE], struct sockaddr *sa)
@@ -102,6 +147,15 @@ cookie_checker_create_payload(struct cookie_checker *cc,
 	rw_runlock(&cc->cc_key_lock);
 
 	explicit_bzero(cookie, sizeof(cookie));
+}
+
+void
+cookie_maker_init(struct cookie_maker *cp, const uint8_t key[COOKIE_INPUT_SIZE])
+{
+	bzero(cp, sizeof(*cp));
+	cookie_precompute_key(cp->cp_mac1_key, key, COOKIE_MAC1_KEY_LABEL);
+	cookie_precompute_key(cp->cp_cookie_key, key, COOKIE_COOKIE_KEY_LABEL);
+	rw_init(&cp->cp_lock, "cookie_maker");
 }
 
 int
@@ -182,10 +236,10 @@ cookie_checker_validate_macs(struct cookie_checker *cc, struct cookie_macs *cm,
 		 * implying there is no ratelimiting, or we should ratelimit
 		 * (refuse) respectively. */
 		if (sa->sa_family == AF_INET)
-			return ratelimit_allow(&cc->cc_ratelimit_v4, sa);
+			return ratelimit_allow(&ratelimit_v4, sa);
 #ifdef INET6
 		else if (sa->sa_family == AF_INET6)
-			return ratelimit_allow(&cc->cc_ratelimit_v6, sa);
+			return ratelimit_allow(&ratelimit_v6, sa);
 #endif
 		else
 			return EAFNOSUPPORT;
@@ -272,14 +326,13 @@ cookie_checker_make_cookie(struct cookie_checker *cc,
 }
 
 static int
-ratelimit_init(struct ratelimit *rl, uma_zone_t zone)
+ratelimit_init(struct ratelimit *rl)
 {
 	rw_init(&rl->rl_lock, "ratelimit_lock");
 	callout_init_rw(&rl->rl_gc, &rl->rl_lock, 0);
 	arc4random_buf(rl->rl_secret, sizeof(rl->rl_secret));
 	rl->rl_table = hashinit_flags(RATELIMIT_SIZE, M_DEVBUF,
 	    &rl->rl_table_mask, M_NOWAIT);
-	rl->rl_zone = zone;
 	rl->rl_table_num = 0;
 	return rl->rl_table == NULL ? ENOBUFS : 0;
 }
@@ -334,7 +387,7 @@ ratelimit_gc(struct ratelimit *rl, bool force)
 			if (r->r_last_time < expiry || force) {
 				rl->rl_table_num--;
 				LIST_REMOVE(r, r_entry);
-				uma_zfree(rl->rl_zone, r);
+				uma_zfree(ratelimit_zone, r);
 			}
 		}
 	}
@@ -408,7 +461,7 @@ ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa)
 		goto error;
 
 	/* Goto error if out of memory */
-	if ((r = uma_zalloc(rl->rl_zone, M_NOWAIT)) == NULL)
+	if ((r = uma_zalloc(ratelimit_zone, M_NOWAIT)) == NULL)
 		goto error;
 
 	rl->rl_table_num++;
