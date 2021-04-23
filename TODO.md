@@ -11,7 +11,6 @@
 - Make sure noise state machine is correct.
 - Investigate whether the allowed ips lookup structure needs reference
   counting.
-- Stop using `M_WAITOK` and use `M_NOWAIT` instead.
 
 ### Crypto TODO
 

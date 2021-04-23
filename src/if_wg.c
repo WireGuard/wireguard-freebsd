@@ -379,8 +379,6 @@ static struct wg_packet *wg_queue_dequeue_serial(struct wg_queue *);
 static struct wg_packet *wg_queue_dequeue_parallel(struct wg_queue *);
 static void wg_input(struct mbuf *, int, struct inpcb *, const struct sockaddr *, void *);
 static void wg_peer_send_staged(struct wg_peer *);
-static void crypto_taskq_setup(struct wg_softc *);
-static void crypto_taskq_destroy(struct wg_softc *);
 static int wg_clone_create(struct if_clone *, int, caddr_t);
 static void wg_qflush(struct ifnet *);
 static int wg_transmit(struct ifnet *, struct mbuf *);
@@ -407,19 +405,25 @@ wg_peer_alloc(struct wg_softc *sc, const uint8_t pub_key[WG_KEY_SIZE])
 
 	sx_assert(&sc->sc_lock, SX_XLOCKED);
 
-	peer = malloc(sizeof(*peer), M_WG, M_WAITOK|M_ZERO);
-	peer->p_sc = sc;
-	peer->p_id = peer_counter++;
-	LIST_INIT(&peer->p_aips);
-	peer->p_aips_num = 0;
+	if ((peer = malloc(sizeof(*peer), M_WG, M_NOWAIT|M_ZERO)) == NULL)
+		goto free_none;
 
-	if ((peer->p_remote = noise_remote_alloc(sc->sc_local, peer, pub_key)) == NULL) {
-		free(peer, M_WG);
-		return NULL;
-	}
+	if ((peer->p_remote = noise_remote_alloc(sc->sc_local, peer, pub_key)) == NULL)
+		goto free_peer;
+
+	if ((peer->p_tx_bytes = counter_u64_alloc(M_NOWAIT)) == NULL)
+		goto free_remote;
+
+	if ((peer->p_rx_bytes = counter_u64_alloc(M_NOWAIT)) == NULL)
+		goto free_tx_bytes;
+
+	peer->p_id = peer_counter++;
+	peer->p_sc = sc;
+
 	cookie_maker_init(&peer->p_cookie, pub_key);
 
 	rw_init(&peer->p_endpoint_lock, "wg_peer_endpoint");
+
 	wg_queue_init(&peer->p_stage_queue, "stageq");
 	wg_queue_init(&peer->p_encrypt_serial, "txq");
 	wg_queue_init(&peer->p_decrypt_serial, "rxq");
@@ -427,7 +431,6 @@ wg_peer_alloc(struct wg_softc *sc, const uint8_t pub_key[WG_KEY_SIZE])
 	peer->p_enabled = false;
 	peer->p_need_another_keepalive = false;
 	peer->p_persistent_keepalive_interval = 0;
-
 	callout_init(&peer->p_new_handshake, true);
 	callout_init(&peer->p_send_keepalive, true);
 	callout_init(&peer->p_retry_handshake, true);
@@ -443,10 +446,18 @@ wg_peer_alloc(struct wg_softc *sc, const uint8_t pub_key[WG_KEY_SIZE])
 	GROUPTASK_INIT(&peer->p_recv, 0, (gtask_fn_t *)wg_deliver_in, peer);
 	taskqgroup_attach(qgroup_wg_tqg, &peer->p_recv, peer, NULL, NULL, "wg recv");
 
-	peer->p_tx_bytes = counter_u64_alloc(M_WAITOK);
-	peer->p_rx_bytes = counter_u64_alloc(M_WAITOK);
+	LIST_INIT(&peer->p_aips);
+	peer->p_aips_num = 0;
 
 	return (peer);
+free_tx_bytes:
+	counter_u64_free(peer->p_tx_bytes);
+free_remote:
+	noise_remote_free(peer->p_remote, NULL);
+free_peer:
+	free(peer, M_WG);
+free_none:
+	return NULL;
 }
 
 static void
@@ -2221,9 +2232,10 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	if (wgd->wgd_size >= UINT32_MAX / 2)
 		return (E2BIG);
 
-	sx_xlock(&sc->sc_lock);
+	if ((nvlpacked = malloc(wgd->wgd_size, M_TEMP, M_NOWAIT)) == NULL)
+		return (ENOMEM);
 
-	nvlpacked = malloc(wgd->wgd_size, M_TEMP, M_WAITOK);
+	sx_xlock(&sc->sc_lock);
 	err = copyin(wgd->wgd_data, nvlpacked, wgd->wgd_size);
 	if (err)
 		goto out;
@@ -2345,7 +2357,10 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 	}
 	peer_count = sc->sc_peers_num;
 	if (peer_count) {
-		nvl_peers = mallocarray(peer_count, sizeof(void *), M_NVLIST, M_WAITOK | M_ZERO);
+		if ((nvl_peers = mallocarray(peer_count, sizeof(void *), M_NVLIST, M_NOWAIT | M_ZERO)) == NULL) {
+			err = ENOMEM;
+			goto err;
+		}
 		i = 0;
 		TAILQ_FOREACH(peer, &sc->sc_peers, p_entry) {
 			if (i >= peer_count)
@@ -2374,7 +2389,10 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 
 			aip_count = peer->p_aips_num;
 			if (aip_count) {
-				nvl_aips = mallocarray(aip_count, sizeof(void *), M_NVLIST, M_WAITOK | M_ZERO);
+				if ((nvl_aips = mallocarray(aip_count, sizeof(void *), M_NVLIST, M_NOWAIT | M_ZERO)) == NULL) {
+					err = ENOMEM;
+					goto err_peer;
+				}
 				j = 0;
 				LIST_FOREACH(aip, &peer->p_aips, a_entry) {
 					if (j >= aip_count)
@@ -2571,12 +2589,48 @@ wg_down(struct wg_softc *sc)
 	sx_xunlock(&sc->sc_lock);
 }
 
-static void
-crypto_taskq_setup(struct wg_softc *sc)
+static int
+wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 {
+	struct wg_softc *sc;
+	struct ifnet *ifp;
 
-	sc->sc_encrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_WAITOK);
-	sc->sc_decrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_WAITOK);
+	if ((sc = malloc(sizeof(*sc), M_WG, M_NOWAIT | M_ZERO)) == NULL)
+		goto free_none;
+
+	if ((sc->sc_local = noise_local_alloc(sc)) == NULL)
+		goto free_sc;
+
+	if ((sc->sc_encrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_NOWAIT)) == NULL)
+		goto free_local;
+
+	if ((sc->sc_decrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_NOWAIT)) == NULL)
+		goto free_encrypt;
+
+	if (!rn_inithead((void **)&sc->sc_aip4, offsetof(struct aip_addr, in) * NBBY))
+		goto free_decrypt;
+
+	if (!rn_inithead((void **)&sc->sc_aip6, offsetof(struct aip_addr, in6) * NBBY))
+		goto free_aip4;
+
+	atomic_add_int(&clone_count, 1);
+	ifp = sc->sc_ifp = if_alloc(IFT_WIREGUARD);
+
+	sc->sc_ucred = crhold(curthread->td_ucred);
+	sc->sc_socket.so_fibnum = curthread->td_proc->p_fibnum;
+	sc->sc_socket.so_port = 0;
+
+	TAILQ_INIT(&sc->sc_peers);
+	sc->sc_peers_num = 0;
+
+	cookie_checker_init(&sc->sc_cookie);
+
+	RADIX_NODE_HEAD_LOCK_INIT(sc->sc_aip4);
+	RADIX_NODE_HEAD_LOCK_INIT(sc->sc_aip6);
+
+	GROUPTASK_INIT(&sc->sc_handshake, 0, (gtask_fn_t *)wg_softc_handshake_receive, sc);
+	taskqgroup_attach(qgroup_wg_tqg, &sc->sc_handshake, sc, NULL, NULL, "wg tx initiation");
+	wg_queue_init(&sc->sc_handshake_queue, "hsq");
 
 	for (int i = 0; i < mp_ncpus; i++) {
 		GROUPTASK_INIT(&sc->sc_encrypt[i], 0,
@@ -2586,56 +2640,16 @@ crypto_taskq_setup(struct wg_softc *sc)
 		    (gtask_fn_t *)wg_softc_decrypt, sc);
 		taskqgroup_attach_cpu(qgroup_wg_tqg, &sc->sc_decrypt[i], sc, i, NULL, NULL, "wg decrypt");
 	}
-}
 
-static void
-crypto_taskq_destroy(struct wg_softc *sc)
-{
-	for (int i = 0; i < mp_ncpus; i++) {
-		taskqgroup_detach(qgroup_wg_tqg, &sc->sc_encrypt[i]);
-		taskqgroup_detach(qgroup_wg_tqg, &sc->sc_decrypt[i]);
-	}
-	free(sc->sc_encrypt, M_WG);
-	free(sc->sc_decrypt, M_WG);
-}
-
-static int
-wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
-{
-	struct wg_softc *sc;
-	struct ifnet *ifp;
-
-	sc = malloc(sizeof(*sc), M_WG, M_NOWAIT | M_ZERO);
-	if (!sc)
-		goto err_mem;
-	sc->sc_local = noise_local_alloc(sc);
-	if (!sc->sc_local)
-		goto free_sc;
-	if (!rn_inithead((void **)&sc->sc_aip4, offsetof(struct aip_addr, in) * NBBY))
-		goto free_noise_local;
-	if (!rn_inithead((void **)&sc->sc_aip6, offsetof(struct aip_addr, in6) * NBBY))
-		goto free_aip4;
-
-	sc->sc_ucred = crhold(curthread->td_ucred);
-	sc->sc_socket.so_fibnum = curthread->td_proc->p_fibnum;
-	ifp = sc->sc_ifp = if_alloc(IFT_WIREGUARD);
-	ifp->if_softc = sc;
-	if_initname(ifp, wgname, unit);
-	TAILQ_INIT(&sc->sc_peers);
-	sc->sc_peers_num = 0;
-	cookie_checker_init(&sc->sc_cookie);
-	sc->sc_socket.so_port = 0;
-	atomic_add_int(&clone_count, 1);
-	ifp->if_capabilities = ifp->if_capenable = WG_CAPS;
-	wg_queue_init(&sc->sc_handshake_queue, "hsq");
-	sx_init(&sc->sc_lock, "wg softc lock");
-	GROUPTASK_INIT(&sc->sc_handshake, 0, (gtask_fn_t *)wg_softc_handshake_receive, sc);
-	taskqgroup_attach(qgroup_wg_tqg, &sc->sc_handshake, sc, NULL, NULL, "wg tx initiation");
-	crypto_taskq_setup(sc);
 	wg_queue_init(&sc->sc_encrypt_parallel, "encp");
 	wg_queue_init(&sc->sc_decrypt_parallel, "decp");
-	RADIX_NODE_HEAD_LOCK_INIT(sc->sc_aip4);
-	RADIX_NODE_HEAD_LOCK_INIT(sc->sc_aip6);
+
+	sx_init(&sc->sc_lock, "wg softc lock");
+
+	ifp->if_softc = sc;
+	ifp->if_capabilities = ifp->if_capenable = WG_CAPS;
+	if_initname(ifp, wgname, unit);
+
 	if_setmtu(ifp, DEFAULT_MTU);
 	ifp->if_flags = IFF_NOARP | IFF_MULTICAST;
 	ifp->if_init = wg_init;
@@ -2654,14 +2668,18 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	LIST_INSERT_HEAD(&wg_list, sc, sc_entry);
 	sx_xunlock(&wg_sx);
 	return (0);
-
 free_aip4:
-	rn_detachhead((void **)&sc->sc_aip4);
-free_noise_local:
+	RADIX_NODE_HEAD_DESTROY(sc->sc_aip4);
+	free(sc->sc_aip4, M_RTABLE);
+free_decrypt:
+	free(sc->sc_decrypt, M_WG);
+free_encrypt:
+	free(sc->sc_encrypt, M_WG);
+free_local:
 	noise_local_free(sc->sc_local, NULL);
 free_sc:
 	free(sc, M_WG);
-err_mem:
+free_none:
 	return (ENOMEM);
 }
 
@@ -2712,7 +2730,12 @@ wg_clone_destroy(struct ifnet *ifp)
 	sx_xunlock(&sc->sc_lock);
 	sx_destroy(&sc->sc_lock);
 	taskqgroup_detach(qgroup_wg_tqg, &sc->sc_handshake);
-	crypto_taskq_destroy(sc);
+	for (int i = 0; i < mp_ncpus; i++) {
+		taskqgroup_detach(qgroup_wg_tqg, &sc->sc_encrypt[i]);
+		taskqgroup_detach(qgroup_wg_tqg, &sc->sc_decrypt[i]);
+	}
+	free(sc->sc_encrypt, M_WG);
+	free(sc->sc_decrypt, M_WG);
 	wg_queue_deinit(&sc->sc_handshake_queue);
 	wg_queue_deinit(&sc->sc_encrypt_parallel);
 	wg_queue_deinit(&sc->sc_decrypt_parallel);
