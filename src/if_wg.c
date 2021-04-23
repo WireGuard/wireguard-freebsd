@@ -1429,8 +1429,10 @@ wg_mbuf_reset(struct mbuf *m)
 			m_tag_delete(m, t);
 	}
 
-	if (m->m_pkthdr.csum_flags & CSUM_SND_TAG)
+	if (m->m_pkthdr.csum_flags & CSUM_SND_TAG) {
 		m_snd_tag_rele(m->m_pkthdr.snd_tag);
+		m->m_pkthdr.snd_tag = NULL;
+	}
 
 	m->m_pkthdr.csum_flags = 0;
 	m->m_pkthdr.PH_per.sixtyfour[0] = 0;
