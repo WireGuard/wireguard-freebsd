@@ -634,11 +634,7 @@ wg_aip_lookup(struct wg_softc *sc, sa_family_t af, void *a)
 	node = root->rnh_matchaddr(&addr, &root->rh);
 	if (node != NULL) {
 		peer = ((struct wg_aip *)node)->a_peer;
-		/* If we have a remote, we should take a reference. The only
-		 * cases where we don't have a remote is in the allowedips
-		 * selftest. */
-		if (peer->p_remote != NULL)
-			noise_remote_ref(peer->p_remote);
+		noise_remote_ref(peer->p_remote);
 	} else {
 		peer = NULL;
 	}

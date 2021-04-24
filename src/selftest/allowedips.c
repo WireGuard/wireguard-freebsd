@@ -233,6 +233,7 @@ static bool randomized_test(void)
 		}
 		LIST_INIT(&peers[i]->p_aips);
 		peers[i]->p_aips_num = 0;
+		peers[i]->p_remote = (struct noise_remote *)peers[i];
 	}
 
 	if (!test_aip_init(&sc)) {
@@ -389,6 +390,7 @@ static struct wg_peer *init_peer(void)
 		return NULL;
 	LIST_INIT(&peer->p_aips);
 	peer->p_aips_num = 0;
+	peer->p_remote = (struct noise_remote *)peer; // Kind of dangerous, but probably fine.
 	return peer;
 }
 

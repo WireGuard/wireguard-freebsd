@@ -1,20 +1,16 @@
-### Primary systems TODO
+### Primary TODO
 
 - Finish porting [this script](https://git.zx2c4.com/wireguard-linux/tree/tools/testing/selftests/wireguard/netns.sh)
   to `./tests/netns.sh` using vnets and epairs.
-- Rework locking and epoch lifetimes; come up with consistent set of rules.
 - Shore up vnet support and races/locking around moving between vnets.
 - Work out `priv_check` from vnet perspective. (There's no `ns_capable()` on
   FreeBSD, just `capable()`, which makes it a bit weird for one jail to have
   permissions in another.)
 - Make code style consistent with one FreeBSD way, rather than a mix of styles.
-- Make sure noise state machine is correct.
-- Investigate whether the allowed ips lookup structure needs reference
-  counting.
 
 ### Crypto TODO
 
-- Do packet encryption using opencrypto/ with sg lists on the mbuf, so that we don't need to linearize mbufs.
+- Do packet encryption using opencrypto/ with sg lists on the mbuf.
 - Send 25519 upstream to sys/crypto, and port to it.
 - Send simple chapoly upstream to sys/crypto, and port to it.
 - Port to sys/crypto's blake2s implementation.
