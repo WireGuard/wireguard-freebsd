@@ -777,12 +777,6 @@ noise_keypair_remote(struct noise_keypair *kp)
 	return (noise_remote_ref(kp->kp_remote));
 }
 
-void *
-noise_keypair_remote_arg(struct noise_keypair *kp)
-{
-	return kp->kp_remote->r_arg;
-}
-
 int
 noise_keypair_nonce_next(struct noise_keypair *kp, uint64_t *send)
 {

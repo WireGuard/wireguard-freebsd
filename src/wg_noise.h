@@ -81,7 +81,6 @@ void	noise_keypair_put(struct noise_keypair *);
 
 struct noise_remote *
 	noise_keypair_remote(struct noise_keypair *);
-void *	noise_keypair_remote_arg(struct noise_keypair *);
 
 int	noise_keypair_nonce_next(struct noise_keypair *, uint64_t *);
 int	noise_keypair_nonce_check(struct noise_keypair *, uint64_t);
