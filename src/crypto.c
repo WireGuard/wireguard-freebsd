@@ -587,7 +587,7 @@ chacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
 	return ret;
 }
 
-static bool
+static inline bool
 chacha20poly1305_crypt_mbuf(struct mbuf *m0, uint64_t nonce,
 			    const uint8_t key[CHACHA20POLY1305_KEY_SIZE], bool encrypt)
 {
