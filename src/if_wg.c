@@ -381,6 +381,7 @@ static void wg_input(struct mbuf *, int, struct inpcb *, const struct sockaddr *
 static void wg_peer_send_staged(struct wg_peer *);
 static int wg_clone_create(struct if_clone *, int, caddr_t);
 static void wg_qflush(struct ifnet *);
+static int wg_xmit(struct ifnet *, struct mbuf *, sa_family_t, uint32_t);
 static int wg_transmit(struct ifnet *, struct mbuf *);
 static int wg_output(struct ifnet *, struct mbuf *, const struct sockaddr *, struct route *);
 static void wg_clone_destroy(struct ifnet *);
@@ -1702,7 +1703,7 @@ wg_deliver_in(struct wg_peer *peer)
 	struct ifnet		*ifp = sc->sc_ifp;
 	struct wg_packet	*pkt;
 	struct mbuf		*m;
-	uint32_t		 af;
+	uint32_t		 bpf_tap_af;
 	bool			 data_recv = false;
 
 	while ((pkt = wg_queue_dequeue_serial(&peer->p_decrypt_serial)) != NULL) {
@@ -1735,8 +1736,8 @@ wg_deliver_in(struct wg_peer *peer)
 
 		m->m_pkthdr.rcvif = ifp;
 
-		af = pkt->p_af;
-		BPF_MTAP2(ifp, &af, sizeof(af), m);
+		bpf_tap_af = pkt->p_af;
+		BPF_MTAP2(ifp, &bpf_tap_af, sizeof(bpf_tap_af), m);
 
 		CURVNET_SET(ifp->if_vnet);
 		M_SETFIB(m, ifp->if_fib);
@@ -2061,31 +2062,34 @@ error:
 }
 
 static int
-wg_transmit(struct ifnet *ifp, struct mbuf *m)
+wg_xmit(struct ifnet *ifp, struct mbuf *m, sa_family_t af, uint32_t mtu)
 {
-	struct wg_packet	*pkt = m->m_pkthdr.PH_loc.ptr;
+	struct wg_packet	*pkt;
 	struct wg_softc		*sc = ifp->if_softc;
 	struct wg_peer		*peer;
-	uint32_t		 af = pkt->p_af;
 	int			 rc = 0;
 	sa_family_t		 peer_af;
+	uint32_t		 bpf_tap_af;
 
 	/* Work around lifetime issue in the ipv6 mld code. */
-	if (__predict_false((ifp->if_flags & IFF_DYING) || !sc)) {
-		rc = ENXIO;
-		goto err_free;
-	}
+	if (__predict_false((ifp->if_flags & IFF_DYING) || !sc))
+		return (ENXIO);
 
-	BPF_MTAP2(ifp, &af, sizeof(af), m);
+	if ((pkt = wg_packet_alloc(m)) == NULL)
+		return (ENOBUFS);
+	pkt->p_mtu = mtu;
+	pkt->p_af = bpf_tap_af = af;
 
-	if (pkt->p_af == AF_INET) {
+	if (af == AF_INET) {
 		peer = wg_aip_lookup(sc, AF_INET, &mtod(m, struct ip *)->ip_dst);
-	} else if (pkt->p_af == AF_INET6) {
+	} else if (af == AF_INET6) {
 		peer = wg_aip_lookup(sc, AF_INET6, &mtod(m, struct ip6_hdr *)->ip6_dst);
 	} else {
 		rc = EAFNOSUPPORT;
 		goto err_counter;
 	}
+
+	BPF_MTAP2(ifp, &bpf_tap_af, sizeof(bpf_tap_af), m);
 
 	if (__predict_false(peer == NULL)) {
 		rc = ENOKEY;
@@ -2115,25 +2119,60 @@ err_peer:
 	noise_remote_put(peer->p_remote);
 err_counter:
 	if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
-	/* TODO: send ICMP unreachable? */
-err_free:
+	if (af == AF_INET) {
+		icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_HOST, 0, 0);
+		pkt->p_mbuf = NULL;
+	} else if (af == AF_INET6) {
+		icmp6_error(m, ICMP6_DST_UNREACH, 0, 0);
+		pkt->p_mbuf = NULL;
+	}
 	wg_packet_free(pkt);
 	return (rc);
 }
 
-static int
-wg_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *sa, struct route *ro)
+static inline sa_family_t
+determine_af(struct mbuf *m)
 {
-	struct wg_packet *pkt;
+	u_char ipv;
+	if (m->m_pkthdr.len < sizeof(struct ip))
+		return AF_UNSPEC;
+	ipv = mtod(m, struct ip *)->ip_v;
+	if (ipv == 4)
+		return AF_INET;
+	if (ipv == 6 && m->m_pkthdr.len >= sizeof(struct ip6_hdr))
+		return AF_INET6;
+	return AF_UNSPEC;
+}
 
-	if ((pkt = wg_packet_alloc(m)) == NULL)
-		return (ENOBUFS);
+static int
+wg_transmit(struct ifnet *ifp, struct mbuf *m)
+{
+	sa_family_t af = determine_af(m);
 
-	pkt->p_af = sa->sa_family;
-	pkt->p_mtu = (ro != NULL && ro->ro_mtu > 0) ? ro->ro_mtu : ifp->if_mtu;
-	m->m_pkthdr.PH_loc.ptr = pkt;
+	if (af == AF_UNSPEC) {
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
+		m_freem(m);
+		return (EAFNOSUPPORT);
+	}
+	return (wg_xmit(ifp, m, af, ifp->if_mtu));
+}
 
-	return (wg_transmit(ifp, m));
+static int
+wg_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst, struct route *ro)
+{
+	uint32_t af, mtu;
+
+	if (dst->sa_family == AF_UNSPEC)
+		memcpy(&af, dst->sa_data, sizeof(af));
+	else
+		af = dst->sa_family;
+	if (af == AF_UNSPEC || af != determine_af(m)) {
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
+		m_freem(m);
+		return (EAFNOSUPPORT);
+	}
+	mtu = (ro != NULL && ro->ro_mtu > 0) ? ro->ro_mtu : ifp->if_mtu;
+	return (wg_xmit(ifp, m, af, mtu));
 }
 
 static int

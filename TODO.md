@@ -7,11 +7,9 @@
   FreeBSD, just `capable()`, which makes it a bit weird for one jail to have
   permissions in another.)
 - Make code style consistent with one FreeBSD way, rather than a mix of styles.
-- Send ICMP messages at the proper place.
 - Review all included headers, and minimize a bit.
 - Figure out clear locking rules for network stack stuff -- when different
-  functions run under what locks and what they race with. There's a lot of
-  weirdness with `wg_transmit`/`wg_output` to deal with.
+  functions run under what locks and what they race with.
 
 ### Crypto TODO
 
