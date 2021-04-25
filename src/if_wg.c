@@ -2073,7 +2073,7 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 	/* Work around lifetime issue in the ipv6 mld code. */
 	if (__predict_false((ifp->if_flags & IFF_DYING) || !sc)) {
 		rc = ENXIO;
-		goto err;
+		goto err_free;
 	}
 
 	BPF_MTAP2(ifp, &af, sizeof(af), m);
@@ -2084,12 +2084,12 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 		peer = wg_aip_lookup(sc, AF_INET6, &mtod(m, struct ip6_hdr *)->ip6_dst);
 	} else {
 		rc = EAFNOSUPPORT;
-		goto err;
+		goto err_counter;
 	}
 
 	if (__predict_false(peer == NULL)) {
 		rc = ENOKEY;
-		goto err;
+		goto err_counter;
 	}
 
 	if (__predict_false(if_tunnel_check_nesting(ifp, m, MTAG_WGLOOP, MAX_LOOPS))) {
@@ -2110,10 +2110,13 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 	wg_peer_send_staged(peer);
 	noise_remote_put(peer->p_remote);
 	return (0);
+
 err_peer:
 	noise_remote_put(peer->p_remote);
-err:
+err_counter:
 	if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
+	/* TODO: send ICMP unreachable? */
+err_free:
 	wg_packet_free(pkt);
 	return (rc);
 }
