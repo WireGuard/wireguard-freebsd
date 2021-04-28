@@ -1282,10 +1282,10 @@ wg_send_keepalive(struct wg_peer *peer)
 		goto send;
 	if ((m = m_gethdr(M_NOWAIT, MT_DATA)) == NULL)
 		return;
-	if ((pkt = wg_packet_alloc(m)) == NULL)
+	if ((pkt = wg_packet_alloc(m)) == NULL) {
+		m_freem(m);
 		return;
-
-	pkt->p_mtu = 0;
+	}
 	wg_queue_push_staged(&peer->p_stage_queue, pkt);
 	DPRINTF(peer->p_sc, "Sending keepalive packet to peer %" PRIu64 "\n", peer->p_id);
 send:
@@ -1488,6 +1488,7 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	uint32_t		 idx;
 	uint8_t			 zeroed[NOISE_AUTHTAG_LEN] = { 0 };
 	int			 pad;
+	enum wg_ring_state	 state = WG_PACKET_DEAD;
 
 	remote = noise_keypair_remote(pkt->p_keypair);
 	peer = noise_remote_arg(remote);
@@ -1502,16 +1503,16 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 
 	/* Pad the packet */
 	if (pad != 0 && !m_append(m, pad, zeroed))
-		goto error;
+		goto out;
 
 	/* Do encryption */
 	if (noise_keypair_encrypt(pkt->p_keypair, &idx, pkt->p_nonce, m) != 0)
-		goto error;
+		goto out;
 
 	/* Put header into packet */
 	M_PREPEND(m, sizeof(struct wg_pkt_data), M_NOWAIT);
 	if (m == NULL)
-		goto error;
+		goto out;
 
 	data.t = WG_PKT_DATA;
 	data.r_idx = idx;
@@ -1519,14 +1520,11 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	memcpy(mtod(m, void *), &data, sizeof(struct wg_pkt_data));
 
 	wg_mbuf_reset(m);
+	state = WG_PACKET_CRYPTED;
+out:
 	pkt->p_mbuf = m;
-	pkt->p_state = WG_PACKET_CRYPTED;
-	GROUPTASK_ENQUEUE(&peer->p_send);
-	noise_remote_put(remote);
-	return;
-error:
-	pkt->p_mbuf = m;
-	pkt->p_state = WG_PACKET_DEAD;
+	wmb();
+	pkt->p_state = state;
 	GROUPTASK_ENQUEUE(&peer->p_send);
 	noise_remote_put(remote);
 }
@@ -1539,6 +1537,7 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	struct noise_remote	*remote;
 	struct mbuf		*m;
 	int			 len;
+	enum wg_ring_state	 state = WG_PACKET_DEAD;
 
 	remote = noise_keypair_remote(pkt->p_keypair);
 	peer = noise_remote_arg(remote);
@@ -1550,13 +1549,14 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 
 	pkt->p_nonce = le64toh(data.nonce);
 	if (noise_keypair_decrypt(pkt->p_keypair, pkt->p_nonce, m) != 0)
-		goto error;
+		goto out;
 
 	/* A packet with length 0 is a keepalive packet */
 	if (__predict_false(m->m_pkthdr.len == 0)) {
 		DPRINTF(sc, "Receiving keepalive packet from peer "
 		    "%" PRIu64 "\n", peer->p_id);
-		goto done;
+		state = WG_PACKET_CRYPTED;
+		goto out;
 	}
 
 	/*
@@ -1582,7 +1582,7 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 			panic("determine_af_and_pullup returned unexpected value");
 	} else {
 		DPRINTF(sc, "Packet is neither ipv4 nor ipv6 from peer %" PRIu64 "\n", peer->p_id);
-		goto error;
+		goto out;
 	}
 
 	/* We only want to compare the address, not dereference, so drop the ref. */
@@ -1591,19 +1591,15 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 
 	if (__predict_false(peer != allowed_peer)) {
 		DPRINTF(sc, "Packet has unallowed src IP from peer %" PRIu64 "\n", peer->p_id);
-		goto error;
+		goto out;
 	}
 
 	wg_mbuf_reset(m);
-done:
+	state = WG_PACKET_CRYPTED;
+out:
 	pkt->p_mbuf = m;
-	pkt->p_state = WG_PACKET_CRYPTED;
-	GROUPTASK_ENQUEUE(&peer->p_recv);
-	noise_remote_put(remote);
-	return;
-error:
-	pkt->p_mbuf = m;
-	pkt->p_state = WG_PACKET_DEAD;
+	wmb();
+	pkt->p_state = state;
 	GROUPTASK_ENQUEUE(&peer->p_recv);
 	noise_remote_put(remote);
 }
@@ -1669,7 +1665,7 @@ wg_deliver_out(struct wg_peer *peer)
 		if (rc == 0) {
 			wg_timers_event_any_authenticated_packet_traversal(peer);
 			wg_timers_event_any_authenticated_packet_sent(peer);
-			if (len > (sizeof(struct wg_pkt_data)+NOISE_AUTHTAG_LEN))
+			if (len > (sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN))
 				data_sent = true;
 			counter_u64_add(peer->p_tx_bytes, len);
 		} else if (rc == EADDRNOTAVAIL) {
