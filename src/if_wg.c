@@ -382,6 +382,7 @@ static void wg_input(struct mbuf *, int, struct inpcb *, const struct sockaddr *
 static void wg_peer_send_staged(struct wg_peer *);
 static int wg_clone_create(struct if_clone *, int, caddr_t);
 static void wg_qflush(struct ifnet *);
+static inline int determine_af_and_pullup(struct mbuf **m, sa_family_t *af);
 static int wg_xmit(struct ifnet *, struct mbuf *, sa_family_t, uint32_t);
 static int wg_transmit(struct ifnet *, struct mbuf *);
 static int wg_output(struct ifnet *, struct mbuf *, const struct sockaddr *, struct route *);
@@ -1537,8 +1538,6 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	struct wg_peer		*peer, *allowed_peer;
 	struct noise_remote	*remote;
 	struct mbuf		*m;
-	struct ip		*ip;
-	struct ip6_hdr		*ip6;
 	int			 len;
 
 	remote = noise_keypair_remote(pkt->p_keypair);
@@ -1565,26 +1564,22 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	 * IP header, we just worry about the sizeof and the version, so we can
 	 * read the source address in wg_aip_lookup.
 	 */
-	ip = mtod(m, struct ip *);
-	ip6 = mtod(m, struct ip6_hdr *);
 
-	if (m->m_pkthdr.len >= sizeof(struct ip) && ip->ip_v == IPVERSION) {
-		pkt->p_af = AF_INET;
-
-		len = ntohs(ip->ip_len);
-		if (len >= sizeof(struct ip) && len < m->m_pkthdr.len)
-			m_adj(m, len - m->m_pkthdr.len);
-
-		allowed_peer = wg_aip_lookup(sc, AF_INET, &ip->ip_src);
-	} else if (m->m_pkthdr.len >= sizeof(struct ip6_hdr) &&
-	    (ip6->ip6_vfc & IPV6_VERSION_MASK) == IPV6_VERSION) {
-		pkt->p_af = AF_INET6;
-
-		len = ntohs(ip6->ip6_plen) + sizeof(struct ip6_hdr);
-		if (len < m->m_pkthdr.len)
-			m_adj(m, len - m->m_pkthdr.len);
-
-		allowed_peer = wg_aip_lookup(sc, AF_INET6, &ip6->ip6_src);
+	if (determine_af_and_pullup(&m, &pkt->p_af) == 0) {
+		if (pkt->p_af == AF_INET) {
+			struct ip *ip = mtod(m, struct ip *);
+			allowed_peer = wg_aip_lookup(sc, AF_INET, &ip->ip_src);
+			len = ntohs(ip->ip_len);
+			if (len >= sizeof(struct ip) && len < m->m_pkthdr.len)
+				m_adj(m, len - m->m_pkthdr.len);
+		} else if (pkt->p_af == AF_INET6) {
+			struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
+			allowed_peer = wg_aip_lookup(sc, AF_INET6, &ip6->ip6_src);
+			len = ntohs(ip6->ip6_plen) + sizeof(struct ip6_hdr);
+			if (len < m->m_pkthdr.len)
+				m_adj(m, len - m->m_pkthdr.len);
+		} else
+			panic("determine_af_and_pullup returned unexpected value");
 	} else {
 		DPRINTF(sc, "Packet is neither ipv4 nor ipv6 from peer %" PRIu64 "\n", peer->p_id);
 		goto error;
