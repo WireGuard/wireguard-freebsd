@@ -332,7 +332,7 @@ static void wg_timers_event_handshake_initiated(struct wg_peer *);
 static void wg_timers_event_handshake_complete(struct wg_peer *);
 static void wg_timers_event_session_derived(struct wg_peer *);
 static void wg_timers_event_want_initiation(struct wg_peer *);
-static void wg_timers_run_send_initiation(struct wg_peer *, int);
+static void wg_timers_run_send_initiation(struct wg_peer *, bool);
 static void wg_timers_run_retry_handshake(void *);
 static void wg_timers_run_send_keepalive(void *);
 static void wg_timers_run_new_handshake(void *);
@@ -1108,12 +1108,12 @@ wg_timers_event_want_initiation(struct wg_peer *peer)
 	struct epoch_tracker et;
 	NET_EPOCH_ENTER(et);
 	if (ck_pr_load_bool(&peer->p_enabled))
-		wg_timers_run_send_initiation(peer, 0);
+		wg_timers_run_send_initiation(peer, false);
 	NET_EPOCH_EXIT(et);
 }
 
 static void
-wg_timers_run_send_initiation(struct wg_peer *peer, int is_retry)
+wg_timers_run_send_initiation(struct wg_peer *peer, bool is_retry)
 {
 	if (!is_retry)
 		peer->p_handshake_retries = 0;
@@ -1136,7 +1136,7 @@ wg_timers_run_retry_handshake(void *_peer)
 		    "after %d seconds, retrying (try %d)\n", peer->p_id,
 		    REKEY_TIMEOUT, peer->p_handshake_retries + 1);
 		wg_peer_clear_src(peer);
-		wg_timers_run_send_initiation(peer, 1);
+		wg_timers_run_send_initiation(peer, true);
 	} else {
 		mtx_unlock(&peer->p_handshake_mtx);
 
@@ -1184,7 +1184,7 @@ wg_timers_run_new_handshake(void *_peer)
 	    peer->p_id, NEW_HANDSHAKE_TIMEOUT);
 
 	wg_peer_clear_src(peer);
-	wg_timers_run_send_initiation(peer, 0);
+	wg_timers_run_send_initiation(peer, false);
 }
 
 static void
