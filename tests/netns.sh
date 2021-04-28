@@ -79,8 +79,10 @@ cj $jail1
 cj $jail2
 
 ifconfig wg1 create
+ifconfig wg1 debug
 ifconfig wg1 vnet ${jail1}
 ifconfig wg2 create
+ifconfig wg2 debug
 ifconfig wg2 vnet ${jail2}
 
 key1="$(pp wg genkey)"
