@@ -449,7 +449,7 @@ ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa, struct vnet *vnet)
 		goto error;
 
 	/* Goto error if out of memory */
-	if ((r = uma_zalloc(ratelimit_zone, M_NOWAIT)) == NULL)
+	if ((r = uma_zalloc(ratelimit_zone, M_NOWAIT | M_ZERO)) == NULL)
 		goto error;
 
 	rl->rl_table_num++;

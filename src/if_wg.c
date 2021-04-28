@@ -274,16 +274,17 @@ struct wg_softc {
 
 #define MAX_LOOPS	8
 #define MTAG_WGLOOP	0x77676c70 /* wglp */
-
-/* TODO the following defines are freebsd specific, we should see what is
- * necessary and cleanup from there (i suspect a lot can be junked). */
-
 #ifndef ENOKEY
 #define	ENOKEY	ENOTCAPABLE
 #endif
 
 #define	GROUPTASK_DRAIN(gtask)			\
 	gtaskqueue_drain((gtask)->gt_taskqueue, &(gtask)->gt_task)
+
+#define BPF_MTAP2_AF(ifp, m, af) do { \
+		uint32_t __bpf_tap_af = (af); \
+		BPF_MTAP2(ifp, &__bpf_tap_af, sizeof(__bpf_tap_af), m); \
+	} while (0)
 
 static int clone_count;
 static uma_zone_t wg_packet_zone;
@@ -1703,7 +1704,6 @@ wg_deliver_in(struct wg_peer *peer)
 	struct ifnet		*ifp = sc->sc_ifp;
 	struct wg_packet	*pkt;
 	struct mbuf		*m;
-	uint32_t		 bpf_tap_af;
 	bool			 data_recv = false;
 
 	while ((pkt = wg_queue_dequeue_serial(&peer->p_decrypt_serial)) != NULL) {
@@ -1736,8 +1736,7 @@ wg_deliver_in(struct wg_peer *peer)
 
 		m->m_pkthdr.rcvif = ifp;
 
-		bpf_tap_af = pkt->p_af;
-		BPF_MTAP2(ifp, &bpf_tap_af, sizeof(bpf_tap_af), m);
+		BPF_MTAP2_AF(ifp, m, pkt->p_af);
 
 		CURVNET_SET(ifp->if_vnet);
 		M_SETFIB(m, ifp->if_fib);
@@ -1766,12 +1765,8 @@ wg_packet_alloc(struct mbuf *m)
 {
 	struct wg_packet *pkt;
 
-	if ((pkt = uma_zalloc(wg_packet_zone, M_NOWAIT)) == NULL) {
-		m_freem(m);
+	if ((pkt = uma_zalloc(wg_packet_zone, M_NOWAIT | M_ZERO)) == NULL)
 		return (NULL);
-	}
-
-	pkt->p_keypair = NULL;
 	pkt->p_mbuf = m;
 	return (pkt);
 }
@@ -1969,6 +1964,7 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 
 	if ((pkt = wg_packet_alloc(m)) == NULL) {
 		if_inc_counter(sc->sc_ifp, IFCOUNTER_IQDROPS, 1);
+		m_freem(m);
 		return;
 	}
 
@@ -2061,24 +2057,48 @@ error:
 	wg_timers_event_want_initiation(peer);
 }
 
+static inline void
+xmit_err(struct ifnet *ifp, struct mbuf *m, struct wg_packet *pkt, sa_family_t af)
+{
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
+	if (af == AF_INET) {
+		icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_HOST, 0, 0);
+		if (pkt)
+			pkt->p_mbuf = NULL;
+		m = NULL;
+	} else if (af == AF_INET6) {
+		icmp6_error(m, ICMP6_DST_UNREACH, 0, 0);
+		if (pkt)
+			pkt->p_mbuf = NULL;
+		m = NULL;
+	}
+	if (pkt)
+		wg_packet_free(pkt);
+	else
+		m_freem(m);
+}
+
 static int
 wg_xmit(struct ifnet *ifp, struct mbuf *m, sa_family_t af, uint32_t mtu)
 {
-	struct wg_packet	*pkt;
+	struct wg_packet	*pkt = NULL;
 	struct wg_softc		*sc = ifp->if_softc;
 	struct wg_peer		*peer;
 	int			 rc = 0;
 	sa_family_t		 peer_af;
-	uint32_t		 bpf_tap_af;
 
 	/* Work around lifetime issue in the ipv6 mld code. */
-	if (__predict_false((ifp->if_flags & IFF_DYING) || !sc))
-		return (ENXIO);
+	if (__predict_false((ifp->if_flags & IFF_DYING) || !sc)) {
+		rc = ENXIO;
+		goto err_xmit;
+	}
 
-	if ((pkt = wg_packet_alloc(m)) == NULL)
-		return (ENOBUFS);
+	if ((pkt = wg_packet_alloc(m)) == NULL) {
+		rc = ENOBUFS;
+		goto err_xmit;
+	}
 	pkt->p_mtu = mtu;
-	pkt->p_af = bpf_tap_af = af;
+	pkt->p_af = af;
 
 	if (af == AF_INET) {
 		peer = wg_aip_lookup(sc, AF_INET, &mtod(m, struct ip *)->ip_dst);
@@ -2086,14 +2106,14 @@ wg_xmit(struct ifnet *ifp, struct mbuf *m, sa_family_t af, uint32_t mtu)
 		peer = wg_aip_lookup(sc, AF_INET6, &mtod(m, struct ip6_hdr *)->ip6_dst);
 	} else {
 		rc = EAFNOSUPPORT;
-		goto err_counter;
+		goto err_xmit;
 	}
 
-	BPF_MTAP2(ifp, &bpf_tap_af, sizeof(bpf_tap_af), m);
+	BPF_MTAP2_AF(ifp, m, pkt->p_af);
 
 	if (__predict_false(peer == NULL)) {
 		rc = ENOKEY;
-		goto err_counter;
+		goto err_xmit;
 	}
 
 	if (__predict_false(if_tunnel_check_nesting(ifp, m, MTAG_WGLOOP, MAX_LOOPS))) {
@@ -2117,20 +2137,12 @@ wg_xmit(struct ifnet *ifp, struct mbuf *m, sa_family_t af, uint32_t mtu)
 
 err_peer:
 	noise_remote_put(peer->p_remote);
-err_counter:
-	if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
-	if (af == AF_INET) {
-		icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_HOST, 0, 0);
-		pkt->p_mbuf = NULL;
-	} else if (af == AF_INET6) {
-		icmp6_error(m, ICMP6_DST_UNREACH, 0, 0);
-		pkt->p_mbuf = NULL;
-	}
-	wg_packet_free(pkt);
+err_xmit:
+	xmit_err(ifp, m, pkt, af);
 	return (rc);
 }
 
-static int
+static inline int
 determine_af_and_pullup(struct mbuf **m, sa_family_t *af)
 {
 	u_char ipv;
@@ -2160,8 +2172,7 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 
 	ret = determine_af_and_pullup(&m, &af);
 	if (ret) {
-		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
-		m_freem(m);
+		xmit_err(ifp, m, NULL, AF_UNSPEC);
 		return (ret);
 	}
 	return (wg_xmit(ifp, m, af, ifp->if_mtu));
@@ -2179,23 +2190,20 @@ wg_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst, struct 
 	else
 		af = dst->sa_family;
 	if (af == AF_UNSPEC) {
-		ret = EAFNOSUPPORT;
-		goto error;
+		xmit_err(ifp, m, NULL, af);
+		return (EAFNOSUPPORT);
 	}
 	ret = determine_af_and_pullup(&m, &parsed_af);
-	if (ret)
-		goto error;
+	if (ret) {
+		xmit_err(ifp, m, NULL, AF_UNSPEC);
+		return (ret);
+	}
 	if (parsed_af != af) {
-		ret = EAFNOSUPPORT;
-		goto error;
+		xmit_err(ifp, m, NULL, AF_UNSPEC);
+		return (EAFNOSUPPORT);
 	}
 	mtu = (ro != NULL && ro->ro_mtu > 0) ? ro->ro_mtu : ifp->if_mtu;
 	return (wg_xmit(ifp, m, parsed_af, mtu));
-
-error:
-	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
-	m_freem(m);
-	return (ret);
 }
 
 static int
