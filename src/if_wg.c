@@ -2130,29 +2130,39 @@ err_counter:
 	return (rc);
 }
 
-static inline sa_family_t
-determine_af(struct mbuf *m)
+static int
+determine_af_and_pullup(struct mbuf **m, sa_family_t *af)
 {
 	u_char ipv;
-	if (m->m_pkthdr.len < sizeof(struct ip))
-		return AF_UNSPEC;
-	ipv = mtod(m, struct ip *)->ip_v;
+	if ((*m)->m_pkthdr.len >= sizeof(struct ip6_hdr))
+		*m = m_pullup(*m, sizeof(struct ip6_hdr));
+	else if ((*m)->m_pkthdr.len >= sizeof(struct ip))
+		*m = m_pullup(*m, sizeof(struct ip));
+	else
+		return (EAFNOSUPPORT);
+	if (*m == NULL)
+		return (ENOBUFS);
+	ipv = mtod(*m, struct ip *)->ip_v;
 	if (ipv == 4)
-		return AF_INET;
-	if (ipv == 6 && m->m_pkthdr.len >= sizeof(struct ip6_hdr))
-		return AF_INET6;
-	return AF_UNSPEC;
+		*af = AF_INET;
+	else if (ipv == 6 && (*m)->m_pkthdr.len >= sizeof(struct ip6_hdr))
+		*af = AF_INET6;
+	else
+		return (EAFNOSUPPORT);
+	return (0);
 }
 
 static int
 wg_transmit(struct ifnet *ifp, struct mbuf *m)
 {
-	sa_family_t af = determine_af(m);
+	sa_family_t af;
+	int ret;
 
-	if (af == AF_UNSPEC) {
+	ret = determine_af_and_pullup(&m, &af);
+	if (ret) {
 		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
-		return (EAFNOSUPPORT);
+		return (ret);
 	}
 	return (wg_xmit(ifp, m, af, ifp->if_mtu));
 }
@@ -2160,19 +2170,32 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 static int
 wg_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst, struct route *ro)
 {
+	sa_family_t parsed_af;
 	uint32_t af, mtu;
+	int ret;
 
 	if (dst->sa_family == AF_UNSPEC)
 		memcpy(&af, dst->sa_data, sizeof(af));
 	else
 		af = dst->sa_family;
-	if (af == AF_UNSPEC || af != determine_af(m)) {
-		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
-		m_freem(m);
-		return (EAFNOSUPPORT);
+	if (af == AF_UNSPEC) {
+		ret = EAFNOSUPPORT;
+		goto error;
+	}
+	ret = determine_af_and_pullup(&m, &parsed_af);
+	if (ret)
+		goto error;
+	if (parsed_af != af) {
+		ret = EAFNOSUPPORT;
+		goto error;
 	}
 	mtu = (ro != NULL && ro->ro_mtu > 0) ? ro->ro_mtu : ifp->if_mtu;
-	return (wg_xmit(ifp, m, af, mtu));
+	return (wg_xmit(ifp, m, parsed_af, mtu));
+
+error:
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
+	m_freem(m);
+	return (ret);
 }
 
 static int
