@@ -1163,8 +1163,8 @@ noise_consume_response(struct noise_local *l, struct noise_remote **rp,
 	    r->r_index.i_local_index == r_idx) {
 		r->r_handshake = hs;
 		r->r_index.i_remote_index = s_idx;
-		ret = noise_begin_session(r);
-		*rp = noise_remote_ref(r);
+		if ((ret = noise_begin_session(r)) == 0)
+			*rp = noise_remote_ref(r);
 	}
 	rw_wunlock(&r->r_handshake_lock);
 error_zero:
