@@ -1488,7 +1488,7 @@ wg_mbuf_reset(struct mbuf *m)
 static void
 wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 {
-	struct wg_pkt_data	 data;
+	struct wg_pkt_data	*data;
 	struct wg_peer		*peer;
 	struct noise_remote	*remote;
 	struct mbuf		*m;
@@ -1520,11 +1520,10 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	M_PREPEND(m, sizeof(struct wg_pkt_data), M_NOWAIT);
 	if (m == NULL)
 		goto out;
-
-	data.t = WG_PKT_DATA;
-	data.r_idx = idx;
-	data.nonce = htole64(pkt->p_nonce);
-	memcpy(mtod(m, void *), &data, sizeof(struct wg_pkt_data));
+	data = mtod(m, struct wg_pkt_data *);
+	data->t = WG_PKT_DATA;
+	data->r_idx = idx;
+	data->nonce = htole64(pkt->p_nonce);
 
 	wg_mbuf_reset(m);
 	state = WG_PACKET_CRYPTED;
