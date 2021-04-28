@@ -187,7 +187,7 @@ struct wg_packet {
 	}			 p_state;
 };
 
-STAILQ_HEAD(wg_packet_list ,wg_packet);
+STAILQ_HEAD(wg_packet_list, wg_packet);
 
 struct wg_queue {
 	struct mtx		 q_mtx;
@@ -930,22 +930,29 @@ wg_send_buf(struct wg_softc *sc, struct wg_endpoint *e, uint8_t *buf, size_t len
 {
 	struct mbuf	*m;
 	int		 ret = 0;
+	bool		 retried = false;
 
 retry:
-	m = m_gethdr(M_WAITOK, MT_DATA);
+	m = m_gethdr(M_NOWAIT, MT_DATA);
+	if (!m) {
+		ret = ENOMEM;
+		goto out;
+	}
 	m->m_len = 0;
 	m_copyback(m, 0, len, buf);
 
 	if (ret == 0) {
 		ret = wg_send(sc, e, m);
 		/* Retry if we couldn't bind to e->e_local */
-		if (ret == EADDRNOTAVAIL) {
+		if (ret == EADDRNOTAVAIL && !retried) {
 			bzero(&e->e_local, sizeof(e->e_local));
+			retried = true;
 			goto retry;
 		}
 	} else {
 		ret = wg_send(sc, e, m);
 	}
+out:
 	if (ret)
 		DPRINTF(sc, "Unable to send packet: %d\n", ret);
 }
@@ -1233,7 +1240,7 @@ wg_send_initiation(struct wg_peer *peer)
 
 	pkt.t = WG_PKT_INITIATION;
 	cookie_maker_mac(&peer->p_cookie, &pkt.m, &pkt,
-	    sizeof(pkt)-sizeof(pkt.m));
+	    sizeof(pkt) - sizeof(pkt.m));
 	wg_peer_send_buf(peer, (uint8_t *)&pkt, sizeof(pkt));
 	wg_timers_event_handshake_initiated(peer);
 }
@@ -2982,11 +2989,9 @@ free_none:
 static void
 wg_module_deinit(void)
 {
-
 	uma_zdestroy(wg_packet_zone);
 	osd_jail_deregister(wg_osd_jail_slot);
 	cookie_deinit();
-
 	MPASS(LIST_EMPTY(&wg_list));
 }
 
