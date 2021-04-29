@@ -1701,6 +1701,7 @@ wg_deliver_in(struct wg_peer *peer)
 	struct ifnet		*ifp = sc->sc_ifp;
 	struct wg_packet	*pkt;
 	struct mbuf		*m;
+	struct epoch_tracker	 et;
 	bool			 data_recv = false;
 
 	while ((pkt = wg_queue_dequeue_serial(&peer->p_decrypt_serial)) != NULL) {
@@ -1733,6 +1734,7 @@ wg_deliver_in(struct wg_peer *peer)
 
 		m->m_pkthdr.rcvif = ifp;
 
+		NET_EPOCH_ENTER(et);
 		BPF_MTAP2_AF(ifp, m, pkt->p_af);
 
 		CURVNET_SET(ifp->if_vnet);
@@ -1742,6 +1744,7 @@ wg_deliver_in(struct wg_peer *peer)
 		if (pkt->p_af == AF_INET6)
 			netisr_dispatch(NETISR_IPV6, m);
 		CURVNET_RESTORE();
+		NET_EPOCH_EXIT(et);
 
 done:
 		wg_packet_free(pkt);
