@@ -1304,7 +1304,9 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 	struct wg_pkt_initiation	*init;
 	struct wg_pkt_response		*resp;
 	struct wg_pkt_cookie		*cook;
+	struct wg_endpoint		*e;
 	struct wg_peer			*peer;
+	struct mbuf			*m;
 	struct noise_remote		*remote = NULL;
 	int				 res;
 	bool				 underload = false;
@@ -1319,16 +1321,19 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 			wg_last_underload = 0;
 	}
 
-	if ((pkt->p_mbuf = m_pullup(pkt->p_mbuf, pkt->p_mbuf->m_pkthdr.len)) == NULL)
+	m = pkt->p_mbuf;
+	e = &pkt->p_endpoint;
+
+	if ((pkt->p_mbuf = m = m_pullup(m, m->m_pkthdr.len)) == NULL)
 		goto error;
 
-	switch (*mtod(pkt->p_mbuf, uint32_t *)) {
+	switch (*mtod(m, uint32_t *)) {
 	case WG_PKT_INITIATION:
-		init = mtod(pkt->p_mbuf, struct wg_pkt_initiation *);
+		init = mtod(m, struct wg_pkt_initiation *);
 
 		res = cookie_checker_validate_macs(&sc->sc_cookie, &init->m,
 				init, sizeof(*init) - sizeof(init->m),
-				underload, &pkt->p_endpoint.e_remote.r_sa,
+				underload, &e->e_remote.r_sa,
 				sc->sc_ifp->if_vnet);
 
 		if (res == EINVAL) {
@@ -1338,7 +1343,7 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 			DPRINTF(sc, "Handshake ratelimited\n");
 			goto error;
 		} else if (res == EAGAIN) {
-			wg_send_cookie(sc, &init->m, init->s_idx, &pkt->p_endpoint);
+			wg_send_cookie(sc, &init->m, init->s_idx, e);
 			goto error;
 		} else if (res != 0) {
 			panic("unexpected response: %d\n", res);
@@ -1354,15 +1359,15 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 
 		DPRINTF(sc, "Receiving handshake initiation from peer %" PRIu64 "\n", peer->p_id);
 
-		wg_peer_set_endpoint(peer, &pkt->p_endpoint);
+		wg_peer_set_endpoint(peer, e);
 		wg_send_response(peer);
 		break;
 	case WG_PKT_RESPONSE:
-		resp = mtod(pkt->p_mbuf, struct wg_pkt_response *);
+		resp = mtod(m, struct wg_pkt_response *);
 
 		res = cookie_checker_validate_macs(&sc->sc_cookie, &resp->m,
 				resp, sizeof(*resp) - sizeof(resp->m),
-				underload, &pkt->p_endpoint.e_remote.r_sa,
+				underload, &e->e_remote.r_sa,
 				sc->sc_ifp->if_vnet);
 
 		if (res == EINVAL) {
@@ -1372,7 +1377,7 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 			DPRINTF(sc, "Handshake ratelimited\n");
 			goto error;
 		} else if (res == EAGAIN) {
-			wg_send_cookie(sc, &resp->m, resp->s_idx, &pkt->p_endpoint);
+			wg_send_cookie(sc, &resp->m, resp->s_idx, e);
 			goto error;
 		} else if (res != 0) {
 			panic("unexpected response: %d\n", res);
@@ -1387,12 +1392,12 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 		peer = noise_remote_arg(remote);
 		DPRINTF(sc, "Receiving handshake response from peer %" PRIu64 "\n", peer->p_id);
 
-		wg_peer_set_endpoint(peer, &pkt->p_endpoint);
+		wg_peer_set_endpoint(peer, e);
 		wg_timers_event_session_derived(peer);
 		wg_timers_event_handshake_complete(peer);
 		break;
 	case WG_PKT_COOKIE:
-		cook = mtod(pkt->p_mbuf, struct wg_pkt_cookie *);
+		cook = mtod(m, struct wg_pkt_cookie *);
 
 		if ((remote = noise_remote_index(sc->sc_local, cook->r_idx)) == NULL) {
 			DPRINTF(sc, "Unknown cookie index\n");
@@ -1418,9 +1423,9 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 	wg_timers_event_any_authenticated_packet_traversal(peer);
 
 not_authenticated:
-	counter_u64_add(peer->p_rx_bytes, pkt->p_mbuf->m_pkthdr.len);
+	counter_u64_add(peer->p_rx_bytes, m->m_pkthdr.len);
 	if_inc_counter(sc->sc_ifp, IFCOUNTER_IPACKETS, 1);
-	if_inc_counter(sc->sc_ifp, IFCOUNTER_IBYTES, pkt->p_mbuf->m_pkthdr.len);
+	if_inc_counter(sc->sc_ifp, IFCOUNTER_IBYTES, m->m_pkthdr.len);
 error:
 	if (remote != NULL)
 		noise_remote_put(remote);
