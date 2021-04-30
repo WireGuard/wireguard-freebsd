@@ -1946,6 +1946,11 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 	struct wg_packet		*pkt;
 	struct wg_peer			*peer;
 	struct wg_softc			*sc = _sc;
+	struct mbuf			*defragged;
+
+	defragged = m_defrag(m, M_NOWAIT);
+	if (defragged)
+		m = defragged;
 
 	/* Caller provided us with `sa`, no need for this header. */
 	m_adj(m, offset + sizeof(struct udphdr));
@@ -2163,6 +2168,11 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 {
 	sa_family_t af;
 	int ret;
+	struct mbuf *defragged;
+
+	defragged = m_defrag(m, M_NOWAIT);
+	if (defragged)
+		m = defragged;
 
 	ret = determine_af_and_pullup(&m, &af);
 	if (ret) {
@@ -2178,6 +2188,7 @@ wg_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst, struct 
 	sa_family_t parsed_af;
 	uint32_t af, mtu;
 	int ret;
+	struct mbuf *defragged;
 
 	if (dst->sa_family == AF_UNSPEC)
 		memcpy(&af, dst->sa_data, sizeof(af));
@@ -2187,6 +2198,11 @@ wg_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst, struct 
 		xmit_err(ifp, m, NULL, af);
 		return (EAFNOSUPPORT);
 	}
+
+	defragged = m_defrag(m, M_NOWAIT);
+	if (defragged)
+		m = defragged;
+
 	ret = determine_af_and_pullup(&m, &parsed_af);
 	if (ret) {
 		xmit_err(ifp, m, NULL, AF_UNSPEC);
