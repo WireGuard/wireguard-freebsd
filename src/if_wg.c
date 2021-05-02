@@ -1965,6 +1965,11 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 	defragged = m_defrag(m, M_NOWAIT);
 	if (defragged)
 		m = defragged;
+	m = m_unshare(m, M_NOWAIT);
+	if (!m) {
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_IQDROPS, 1);
+		return;
+	}
 
 	/* Caller provided us with `sa`, no need for this header. */
 	m_adj(m, offset + sizeof(struct udphdr));
@@ -2087,7 +2092,7 @@ xmit_err(struct ifnet *ifp, struct mbuf *m, struct wg_packet *pkt, sa_family_t a
 	}
 	if (pkt)
 		wg_packet_free(pkt);
-	else
+	else if (m)
 		m_freem(m);
 }
 
@@ -2187,6 +2192,11 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 	defragged = m_defrag(m, M_NOWAIT);
 	if (defragged)
 		m = defragged;
+	m = m_unshare(m, M_NOWAIT);
+	if (!m) {
+		xmit_err(ifp, m, NULL, AF_UNSPEC);
+		return (ENOBUFS);
+	}
 
 	ret = determine_af_and_pullup(&m, &af);
 	if (ret) {
@@ -2216,6 +2226,11 @@ wg_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst, struct 
 	defragged = m_defrag(m, M_NOWAIT);
 	if (defragged)
 		m = defragged;
+	m = m_unshare(m, M_NOWAIT);
+	if (!m) {
+		xmit_err(ifp, m, NULL, AF_UNSPEC);
+		return (ENOBUFS);
+	}
 
 	ret = determine_af_and_pullup(&m, &parsed_af);
 	if (ret) {
