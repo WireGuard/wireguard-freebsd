@@ -1995,10 +1995,8 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 		sin6 = (const struct sockaddr_in6 *)sa;
 		pkt->p_endpoint.e_remote.r_sin6 = sin6[0];
 		pkt->p_endpoint.e_local.l_in6 = sin6[1].sin6_addr;
-	} else {
-		if_inc_counter(sc->sc_ifp, IFCOUNTER_IERRORS, 1);
+	} else
 		goto error;
-	}
 
 	if ((m->m_pkthdr.len == sizeof(struct wg_pkt_initiation) &&
 		*mtod(m, uint32_t *) == WG_PKT_INITIATION) ||
