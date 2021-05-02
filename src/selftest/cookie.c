@@ -39,6 +39,7 @@ cookie_ratelimit_timings_test(void)
 #endif
 	int i;
 
+	bzero(&rl, sizeof(rl));
 	ratelimit_init(&rl);
 
 	sin.sin_family = AF_INET;
@@ -100,6 +101,7 @@ cookie_ratelimit_capacity_test(void)
 	struct sockaddr_in sin;
 	int i;
 
+	bzero(&rl, sizeof(rl));
 	ratelimit_init(&rl);
 
 	sin.sin_family = AF_INET;
@@ -128,6 +130,7 @@ cookie_ratelimit_gc_test(void)
 	struct sockaddr_in sin;
 	int i;
 
+	bzero(&rl, sizeof(rl));
 	ratelimit_init(&rl);
 
 	sin.sin_family = AF_INET;
