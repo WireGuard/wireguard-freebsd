@@ -99,7 +99,7 @@ __FBSDID("$FreeBSD$");
 #define WG_PKT_COOKIE htole32(3)
 #define WG_PKT_DATA htole32(4)
 
-#define WG_PKT_ALIGNMENT	16
+#define WG_PKT_PADDING		16
 #define WG_KEY_SIZE		32
 
 struct wg_pkt_initiation {
@@ -1484,31 +1484,42 @@ wg_mbuf_reset(struct mbuf *m)
 	m->m_pkthdr.PH_loc.sixtyfour[0] = 0;
 }
 
+static inline unsigned int
+calculate_padding(struct wg_packet *pkt)
+{
+	unsigned int padded_size, last_unit = pkt->p_mbuf->m_pkthdr.len;
+
+	if (__predict_false(!pkt->p_mtu))
+		return (last_unit + (WG_PKT_PADDING - 1)) & ~(WG_PKT_PADDING - 1);
+
+	if (__predict_false(last_unit > pkt->p_mtu))
+		last_unit %= pkt->p_mtu;
+
+	padded_size = (last_unit + (WG_PKT_PADDING - 1)) & ~(WG_PKT_PADDING - 1);
+	if (pkt->p_mtu < padded_size)
+		padded_size = pkt->p_mtu;
+	return padded_size - last_unit;
+}
+
 static void
 wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 {
+	static const uint8_t	 padding[WG_PKT_PADDING] = { 0 };
 	struct wg_pkt_data	*data;
 	struct wg_peer		*peer;
 	struct noise_remote	*remote;
 	struct mbuf		*m;
 	uint32_t		 idx;
-	uint8_t			 zeroed[NOISE_AUTHTAG_LEN] = { 0 };
-	int			 pad;
+	unsigned int		 padlen;
 	enum wg_ring_state	 state = WG_PACKET_DEAD;
 
 	remote = noise_keypair_remote(pkt->p_keypair);
 	peer = noise_remote_arg(remote);
 	m = pkt->p_mbuf;
 
-	/* Calculate what padding we need to add then limit it to the mtu of
-	 * the interface. This is done to ensure we don't "over pad" a packet
-	 * that is just under the MTU.  */
-	pad = (-m->m_pkthdr.len) & (WG_PKT_ALIGNMENT - 1);
-	if (m->m_pkthdr.len + pad > pkt->p_mtu)
-		pad = pkt->p_mtu - m->m_pkthdr.len;
-
 	/* Pad the packet */
-	if (pad != 0 && !m_append(m, pad, zeroed))
+	padlen = calculate_padding(pkt);
+	if (padlen != 0 && !m_append(m, padlen, padding))
 		goto out;
 
 	/* Do encryption */
