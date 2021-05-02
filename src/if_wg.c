@@ -1548,7 +1548,6 @@ out:
 static void
 wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 {
-	struct wg_pkt_data	 data;
 	struct wg_peer		*peer, *allowed_peer;
 	struct noise_remote	*remote;
 	struct mbuf		*m;
@@ -1559,11 +1558,10 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	peer = noise_remote_arg(remote);
 	m = pkt->p_mbuf;
 
-	/* Read index, nonce and then adjust to remove the header. */
-	memcpy(&data, mtod(m, void *), sizeof(struct wg_pkt_data));
+	/* Read nonce and then adjust to remove the header. */
+	pkt->p_nonce = le64toh(mtod(m, struct wg_pkt_data *)->nonce);
 	m_adj(m, sizeof(struct wg_pkt_data));
 
-	pkt->p_nonce = le64toh(data.nonce);
 	if (noise_keypair_decrypt(pkt->p_keypair, pkt->p_nonce, m) != 0)
 		goto out;
 
