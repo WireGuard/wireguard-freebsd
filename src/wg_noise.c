@@ -26,9 +26,15 @@
 
 /* Constants for the counter */
 #define COUNTER_BITS_TOTAL	8192
-#define COUNTER_BITS		(sizeof(unsigned long) * 8)
-#define COUNTER_NUM		(COUNTER_BITS_TOTAL / COUNTER_BITS)
-#define COUNTER_WINDOW_SIZE	(COUNTER_BITS_TOTAL - COUNTER_BITS)
+#ifdef __LP64__
+#define COUNTER_ORDER		6
+#define COUNTER_BITS		64
+#else
+#define COUNTER_ORDER		5
+#define COUNTER_BITS		32
+#endif
+#define COUNTER_REDUNDANT_BITS	COUNTER_BITS
+#define COUNTER_WINDOW_SIZE	(COUNTER_BITS_TOTAL - COUNTER_REDUNDANT_BITS)
 
 /* Constants for the keypair */
 #define REKEY_AFTER_MESSAGES	(1ull << 60)
@@ -68,7 +74,7 @@ struct noise_keypair {
 	struct rwlock			 kp_nonce_lock;
 	uint64_t			 kp_nonce_send;
 	uint64_t			 kp_nonce_recv;
-	unsigned long			 kp_backtrack[COUNTER_NUM];
+	unsigned long			 kp_backtrack[COUNTER_BITS_TOTAL / COUNTER_BITS];
 
 	struct epoch_context		 kp_smr;
 };
@@ -799,31 +805,29 @@ noise_keypair_nonce_next(struct noise_keypair *kp, uint64_t *send)
 int
 noise_keypair_nonce_check(struct noise_keypair *kp, uint64_t recv)
 {
-	uint64_t i, top, index_recv, index_ctr;
-	unsigned long bit;
+	unsigned long index, index_current, top, i, bit;
 	int ret = EEXIST;
 
 	rw_wlock(&kp->kp_nonce_lock);
 
-	/* Check that the recv counter is valid */
-	if (kp->kp_nonce_recv >= REJECT_AFTER_MESSAGES ||
-	    recv >= REJECT_AFTER_MESSAGES)
+	if (__predict_false(kp->kp_nonce_recv >= REJECT_AFTER_MESSAGES + 1 ||
+			    recv >= REJECT_AFTER_MESSAGES))
 		goto error;
 
-	/* If the packet is out of the window, invalid */
-	if (recv + COUNTER_WINDOW_SIZE < kp->kp_nonce_recv)
+	++recv;
+
+	if (__predict_false(recv + COUNTER_WINDOW_SIZE < kp->kp_nonce_recv))
 		goto error;
 
-	/* If the new counter is ahead of the current counter, we'll need to
-	 * zero out the bitmap that has previously been used */
-	index_recv = recv / COUNTER_BITS;
-	index_ctr = kp->kp_nonce_recv / COUNTER_BITS;
+	index = recv >> COUNTER_ORDER;
 
-	if (recv > kp->kp_nonce_recv) {
-		top = MIN(index_recv - index_ctr, COUNTER_NUM);
+	if (__predict_true(recv > kp->kp_nonce_recv)) {
+		index_current = kp->kp_nonce_recv >> COUNTER_ORDER;
+		top = MIN(index - index_current, COUNTER_BITS_TOTAL / COUNTER_BITS);
 		for (i = 1; i <= top; i++)
 			kp->kp_backtrack[
-			    (i + index_ctr) & (COUNTER_NUM - 1)] = 0;
+			    (i + index_current) &
+				((COUNTER_BITS_TOTAL / COUNTER_BITS) - 1)] = 0;
 #ifdef __LP64__
 		ck_pr_store_64(&kp->kp_nonce_recv, recv);
 #else
@@ -831,14 +835,12 @@ noise_keypair_nonce_check(struct noise_keypair *kp, uint64_t recv)
 #endif
 	}
 
-	index_recv %= COUNTER_NUM;
-	bit = 1ul << (recv % COUNTER_BITS);
-
-	if (kp->kp_backtrack[index_recv] & bit)
+	index &= (COUNTER_BITS_TOTAL / COUNTER_BITS) - 1;
+	bit = 1ul << (recv & (COUNTER_BITS - 1));
+	if (kp->kp_backtrack[index] & bit)
 		goto error;
 
-	kp->kp_backtrack[index_recv] |= bit;
-
+	kp->kp_backtrack[index] |= bit;
 	ret = 0;
 error:
 	rw_wunlock(&kp->kp_nonce_lock);

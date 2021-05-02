@@ -10,18 +10,18 @@
 	rw_init(&kp.kp_nonce_lock, "counter");	\
 } while (0)
 #define T(num, v, e) do {						\
-	if (noise_keypair_nonce_check(&kp, v) != e) {			\
-		printf("%s, test %d: FAIL\n", __func__, num);	\
-		return;							\
+	if (noise_keypair_nonce_check(&kp, v) != (e)) {			\
+		printf("nonce counter self-test %u: FAIL\n", num);	\
+		success = false;					\
 	}								\
 } while (0)
-#define T_PASSED printf("%s: pass\n", __func__)
 
 void
 noise_counter_selftest(void)
 {
 	struct noise_keypair kp;
-	int i;
+	unsigned int i;
+	bool success = true;
 
 	T_INIT;
 	/* T(test number, nonce, expected_response) */
@@ -93,5 +93,6 @@ noise_counter_selftest(void)
 	T(48, 0, 0);
 	T(49, COUNTER_WINDOW_SIZE + 1, 0);
 
-	T_PASSED;
+	if (success)
+		printf("nonce counter self-test: pass\n");
 }
