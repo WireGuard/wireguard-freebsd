@@ -1662,7 +1662,6 @@ wg_deliver_out(struct wg_peer *peer)
 	struct wg_packet	*pkt;
 	struct mbuf		*m;
 	int			 rc, len;
-	bool			 data_sent = false;
 
 	wg_peer_get_endpoint(peer, &endpoint);
 
@@ -1680,7 +1679,7 @@ wg_deliver_out(struct wg_peer *peer)
 			wg_timers_event_any_authenticated_packet_traversal(peer);
 			wg_timers_event_any_authenticated_packet_sent(peer);
 			if (len > (sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN))
-				data_sent = true;
+				wg_timers_event_data_sent(peer);
 			counter_u64_add(peer->p_tx_bytes, len);
 		} else if (rc == EADDRNOTAVAIL) {
 			wg_peer_clear_src(peer);
@@ -1690,16 +1689,13 @@ wg_deliver_out(struct wg_peer *peer)
 			goto error;
 		}
 		wg_packet_free(pkt);
+		if (noise_keep_key_fresh_send(peer->p_remote))
+			wg_timers_event_want_initiation(peer);
 		continue;
 error:
 		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		wg_packet_free(pkt);
 	}
-
-	if (data_sent)
-		wg_timers_event_data_sent(peer);
-	if (noise_keep_key_fresh_send(peer->p_remote))
-		wg_timers_event_want_initiation(peer);
 }
 
 static void
@@ -1710,7 +1706,6 @@ wg_deliver_in(struct wg_peer *peer)
 	struct wg_packet	*pkt;
 	struct mbuf		*m;
 	struct epoch_tracker	 et;
-	bool			 data_recv = false;
 
 	while ((pkt = wg_queue_dequeue_serial(&peer->p_decrypt_serial)) != NULL) {
 		if (pkt->p_state != WG_PACKET_CRYPTED)
@@ -1738,7 +1733,6 @@ wg_deliver_in(struct wg_peer *peer)
 
 		MPASS(pkt->p_af == AF_INET || pkt->p_af == AF_INET6);
 		pkt->p_mbuf = NULL;
-		data_recv = true;
 
 		m->m_pkthdr.rcvif = ifp;
 
@@ -1754,18 +1748,17 @@ wg_deliver_in(struct wg_peer *peer)
 		CURVNET_RESTORE();
 		NET_EPOCH_EXIT(et);
 
+		wg_timers_event_data_received(peer);
+
 done:
+		if (noise_keep_key_fresh_recv(peer->p_remote))
+			wg_timers_event_want_initiation(peer);
 		wg_packet_free(pkt);
 		continue;
 error:
 		if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 		wg_packet_free(pkt);
 	}
-
-	if (data_recv)
-		wg_timers_event_data_received(peer);
-	if (noise_keep_key_fresh_recv(peer->p_remote))
-		wg_timers_event_want_initiation(peer);
 }
 
 static struct wg_packet *

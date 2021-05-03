@@ -434,7 +434,8 @@ noise_remote_index_lookup(struct noise_local *l, uint32_t idx0, bool lookup_keyp
 }
 
 struct noise_remote *
-noise_remote_index(struct noise_local *l, uint32_t idx) {
+noise_remote_index(struct noise_local *l, uint32_t idx)
+{
 	return noise_remote_index_lookup(l, idx, true);
 }
 
