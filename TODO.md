@@ -10,6 +10,7 @@
 - Review all included headers, and minimize a bit.
 - Figure out clear locking rules for network stack stuff -- when different
   functions run under what locks and what they race with.
+- There are a few rwlocks that only ever wlock. Make these mtx instead.
 
 ### Crypto TODO
 
