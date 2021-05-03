@@ -2948,7 +2948,8 @@ VNET_SYSINIT(vnet_wg_init, SI_SUB_PROTO_IFATTACHDOMAIN, SI_ORDER_ANY,
 static void
 vnet_wg_uninit(const void *unused __unused)
 {
-	if_clone_detach(V_wg_cloner);
+	if (V_wg_cloner)
+		if_clone_detach(V_wg_cloner);
 }
 VNET_SYSUNINIT(vnet_wg_uninit, SI_SUB_PROTO_IFATTACHDOMAIN, SI_ORDER_ANY,
 	       vnet_wg_uninit, NULL);
@@ -3021,10 +3022,18 @@ free_none:
 static void
 wg_module_deinit(void)
 {
-	uma_zdestroy(wg_packet_zone);
+	VNET_ITERATOR_DECL(vnet_iter);
+	VNET_LIST_RLOCK();
+	VNET_FOREACH(vnet_iter) {
+		if_clone_detach(VNET_VNET(vnet_iter, wg_cloner));
+		VNET_VNET(vnet_iter, wg_cloner) = NULL;
+	}
+	VNET_LIST_RUNLOCK();
+	NET_EPOCH_WAIT();
+	MPASS(LIST_EMPTY(&wg_list));
 	osd_jail_deregister(wg_osd_jail_slot);
 	cookie_deinit();
-	MPASS(LIST_EMPTY(&wg_list));
+	uma_zdestroy(wg_packet_zone);
 }
 
 static int
@@ -3043,7 +3052,7 @@ wg_module_event_handler(module_t mod, int what, void *arg)
 }
 
 static moduledata_t wg_moduledata = {
-	"wg",
+	wgname,
 	wg_module_event_handler,
 	NULL
 };
