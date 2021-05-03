@@ -445,9 +445,9 @@ noise_remote_index_remove(struct noise_local *l, struct noise_remote *r)
 	rw_assert(&r->r_handshake_lock, RA_WLOCKED);
 	if (r->r_handshake_state != HANDSHAKE_DEAD) {
 		rw_wlock(&l->l_index_lock);
+		r->r_handshake_state = HANDSHAKE_DEAD;
 		CK_LIST_REMOVE(&r->r_index, i_entry);
 		rw_wunlock(&l->l_index_lock);
-		r->r_handshake_state = HANDSHAKE_DEAD;
 		return (1);
 	}
 	return (0);
@@ -634,6 +634,7 @@ noise_add_new_keypair(struct noise_local *l, struct noise_remote *r,
 
 	rw_wlock(&l->l_index_lock);
 	CK_LIST_INSERT_BEFORE(r_i, &kp->kp_index, i_entry);
+	r->r_handshake_state = HANDSHAKE_DEAD;
 	CK_LIST_REMOVE(r_i, i_entry);
 	rw_wunlock(&l->l_index_lock);
 
@@ -1346,7 +1347,7 @@ noise_tai64n_now(uint8_t output[NOISE_TIMESTAMP_LEN])
 	memcpy(output + sizeof(sec), &nsec, sizeof(nsec));
 }
 
-static __inline int
+static inline int
 noise_timer_expired(sbintime_t timer, uint32_t sec, uint32_t nsec)
 {
 	sbintime_t now = getsbinuptime();
