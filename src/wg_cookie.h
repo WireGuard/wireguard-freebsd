@@ -68,7 +68,7 @@ int	cookie_checker_validate_macs(struct cookie_checker *,
 	    struct vnet *);
 
 #ifdef SELFTESTS
-void	cookie_selftest(void);
+bool	cookie_selftest(void);
 #endif /* SELFTESTS */
 
 #endif /* __COOKIE_H__ */

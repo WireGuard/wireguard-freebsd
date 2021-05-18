@@ -129,7 +129,7 @@ int	noise_consume_response(
 	    uint8_t en[0 + NOISE_AUTHTAG_LEN]);
 
 #ifdef SELFTESTS
-void	noise_counter_selftest(void);
+bool	noise_counter_selftest(void);
 #endif /* SELFTESTS */
 
 #endif /* __NOISE_H__ */

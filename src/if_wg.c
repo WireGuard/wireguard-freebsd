@@ -2986,19 +2986,23 @@ wg_prison_remove(void *obj, void *data __unused)
 
 #ifdef SELFTESTS
 #include "selftest/allowedips.c"
-static void wg_run_selftests(void)
+static bool wg_run_selftests(void)
 {
-	wg_allowedips_selftest();
-	noise_counter_selftest();
-	cookie_selftest();
+	bool ret = true;
+	ret &= wg_allowedips_selftest();
+	ret &= noise_counter_selftest();
+	ret &= cookie_selftest();
+	return ret;
 }
 #else
-static inline void wg_run_selftests(void) { }
+static inline bool wg_run_selftests(void) { return true; }
 #endif
 
 static int
 wg_module_init(void)
 {
+	int ret = ENOMEM;
+
 	osd_method_t methods[PR_MAXMETHOD] = {
 		[PR_METHOD_REMOVE] = wg_prison_remove,
 	};
@@ -3010,13 +3014,17 @@ wg_module_init(void)
 		goto free_zone;
 
 	wg_osd_jail_slot = osd_jail_register(NULL, methods);
-	wg_run_selftests();
+
+	ret = ENOTRECOVERABLE;
+	if (!wg_run_selftests())
+		goto free_zone;
+
 	return (0);
 
 free_zone:
 	uma_zdestroy(wg_packet_zone);
 free_none:
-	return (ENOMEM);
+	return (ret);
 }
 
 static void

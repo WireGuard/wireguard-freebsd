@@ -2,11 +2,10 @@ freebsd_task:
     timeout_in: 120m
     install_script:
     -  ASSUME_ALWAYS_YES=yes pkg bootstrap -f ; pkg install -y bash iperf3 wireguard-tools
-    script:
     - fetch https://download.freebsd.org/ftp/releases/$(uname -m)/$(uname -r)/src.txz
     - tar -C / -x -f src.txz
     build_script:
-    - make -j $(sysctl -n hw.ncpu) -C src
+    - make -j $(sysctl -n hw.ncpu) -C src DEBUG_FLAGS=-DSELFTESTS
     test_script:
     - kldload src/if_wg.ko
     - tests/netns.sh

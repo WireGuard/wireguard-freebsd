@@ -30,9 +30,10 @@ static const struct expected_results {
 
 static struct ratelimit rl;
 
-static void
+static bool
 cookie_ratelimit_timings_test(void)
 {
+	bool ret = false;
 	struct sockaddr_in sin;
 #ifdef INET6
 	struct sockaddr_in6 sin6;
@@ -91,15 +92,18 @@ cookie_ratelimit_timings_test(void)
 #endif
 	}
 	T_PASSED;
+	ret = true;
 cleanup:
 	ratelimit_deinit(&rl);
+	return ret;
 }
 
-static void
+static bool
 cookie_ratelimit_capacity_test(void)
 {
 	struct sockaddr_in sin;
 	int i;
+	bool ret = false;
 
 	bzero(&rl, sizeof(rl));
 	ratelimit_init(&rl);
@@ -120,15 +124,18 @@ cookie_ratelimit_capacity_test(void)
 		}
 	}
 	T_PASSED;
+	ret = true;
 cleanup:
 	ratelimit_deinit(&rl);
+	return ret;
 }
 
-static void
+static bool
 cookie_ratelimit_gc_test(void)
 {
 	struct sockaddr_in sin;
 	int i;
+	bool ret = false;
 
 	bzero(&rl, sizeof(rl));
 	ratelimit_init(&rl);
@@ -165,11 +172,13 @@ cookie_ratelimit_gc_test(void)
 	if (rl.rl_table_num != 0)
 		T_FAILED("gc");
 	T_PASSED;
+	ret = true;
 cleanup:
 	ratelimit_deinit(&rl);
+	return ret;
 }
 
-static void
+static bool
 cookie_mac_test(void)
 {
 	struct cookie_checker checker;
@@ -177,6 +186,7 @@ cookie_mac_test(void)
 	struct cookie_macs cm;
 	struct sockaddr_in sin;
 	int res, i;
+	bool ret = false;
 
 	uint8_t	nonce[COOKIE_NONCE_SIZE];
 	uint8_t	cookie[COOKIE_ENCRYPTED_SIZE];
@@ -280,15 +290,18 @@ cookie_mac_test(void)
 		T_FAILED("validate_macs_load_normal_mac2_retry");
 
 	T_PASSED;
+	ret = true;
 cleanup:
-	return;
+	return ret;
 }
 
-void
+bool
 cookie_selftest(void)
 {
-	cookie_ratelimit_timings_test();
-	cookie_ratelimit_capacity_test();
-	cookie_ratelimit_gc_test();
-	cookie_mac_test();
+	bool ret = true;
+	ret &= cookie_ratelimit_timings_test();
+	ret &= cookie_ratelimit_capacity_test();
+	ret &= cookie_ratelimit_gc_test();
+	ret &= cookie_mac_test();
+	return ret;
 }

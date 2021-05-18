@@ -16,7 +16,7 @@
 	}								\
 } while (0)
 
-void
+bool
 noise_counter_selftest(void)
 {
 	struct noise_keypair kp;
@@ -95,4 +95,5 @@ noise_counter_selftest(void)
 
 	if (success)
 		printf("nonce counter self-test: pass\n");
+	return success;
 }
