@@ -1,0 +1,25 @@
+freebsd_task:
+    timeout_in: 120m
+    install_script:
+    -  ASSUME_ALWAYS_YES=yes pkg bootstrap -f ; pkg install -y bash iperf3 wireguard-tools
+    script:
+    - fetch https://download.freebsd.org/ftp/releases/$(uname -m)/$(uname -r)/src.txz
+    - tar -C / -x -f src.txz
+    build_script:
+    - make -j $(sysctl -n hw.ncpu) -C src
+    test_script:
+    - kldload src/if_wg.ko
+    - tests/netns.sh
+    matrix:
+    # bash fails on 11 and 12 with undefined symbols (e.g.
+    # "rl_executing_keyseq" referenced from COPY relocation in
+    # /usr/local/bin/bash) so skip for now.
+    #- name: freebsd11-amd64
+    #  freebsd_instance:
+    #    image: freebsd-11-2-release-amd64
+    #- name: freebsd12-amd64
+    #  freebsd_instance:
+    #    image: freebsd-12-0-release-amd64
+    - name: freebsd13-amd64
+      freebsd_instance:
+        image: freebsd-13-0-release-amd64
