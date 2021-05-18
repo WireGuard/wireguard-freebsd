@@ -188,7 +188,7 @@ ifconfig1 wg1 mtu $big_mtu
 ifconfig2 wg2 mtu $big_mtu
 tests
 
-exit 1
+exit 0
 
 ip1 link set wg0 mtu $orig_mtu
 ip2 link set wg0 mtu $orig_mtu
