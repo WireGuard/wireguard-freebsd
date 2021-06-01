@@ -46,9 +46,12 @@ jid0="$(pp jail -ic path=/ vnet=new children.max=2 persist)"
 jid1="$(j0 jail -ic path=/ vnet=new persist)"
 jid2="$(j0 jail -ic path=/ vnet=new persist)"
 
+pp sysctl net.inet.udp.maxdgram=65535 # Global! Eep!
+pp sysctl net.inet.udp.recvspace=65535 # Global! Eep!
 j0 sysctl net.inet6.ip6.dad_count=0
 j1 sysctl net.inet6.ip6.dad_count=0
 j2 sysctl net.inet6.ip6.dad_count=0
+ifconfig0 lo0 mtu 65535
 ifconfig0 lo0 127.0.0.1/8
 ifconfig0 lo0 inet6 ::1/128
 ifconfig0 lo0 up
@@ -127,7 +130,7 @@ tests() {
 }
 
 [[ $(ifconfig1 wg1) =~ mtu\ ([0-9]+) ]] && orig_mtu="${BASH_REMATCH[1]}"
-big_mtu=$(( 16384 - 1500 + $orig_mtu ))
+big_mtu=$(( 65535 - 1500 + $orig_mtu ))
 
 # Test using IPv4 as outer transport
 ifconfig1 wg1 mtu $orig_mtu
