@@ -98,4 +98,9 @@ static inline uint32_t arc4random_uniform(uint32_t bound)
 }
 
 typedef void callout_func_t(void *);
+
+#ifndef CSUM_SND_TAG
+#define CSUM_SND_TAG 0x80000000
+#endif
+
 #endif
