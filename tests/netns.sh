@@ -46,6 +46,9 @@ jid0="$(pp jail -ic path=/ vnet=new children.max=2 persist)"
 jid1="$(j0 jail -ic path=/ vnet=new persist)"
 jid2="$(j0 jail -ic path=/ vnet=new persist)"
 
+j0 sysctl net.inet6.ip6.dad_count=0
+j1 sysctl net.inet6.ip6.dad_count=0
+j2 sysctl net.inet6.ip6.dad_count=0
 ifconfig0 lo0 127.0.0.1/8
 ifconfig0 lo0 inet6 ::1/128
 ifconfig0 lo0 up
@@ -84,8 +87,10 @@ tests() {
 	j1 ping -c 10 -f -W 1 192.168.241.2
 
 	# Ping over IPv6
-	j2 ping6 -c 10 -f -W 1 fd00::1
-	j1 ping6 -c 10 -f -W 1 fd00::2
+	local wtarg=-W
+	[[ $(ping6 2>&1) == *"-x waittime"* ]] && wtarg=-x # Terrible FreeBSD12ism, fixed in 13
+	j2 ping6 -c 10 -f $wtarg 1 fd00::1
+	j1 ping6 -c 10 -f $wtarg 1 fd00::2
 
 	# TCP over IPv4
 	j2 iperf3 -s -1 -B 192.168.241.2 &
