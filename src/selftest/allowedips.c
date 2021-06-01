@@ -218,7 +218,7 @@ static bool randomized_test(void)
 	uint8_t ip[16], mutate_mask[16], mutated[16];
 	struct wg_peer **peers, *peer;
 	struct horrible_allowedips h;
-	struct wg_softc sc = { 0 };
+	struct wg_softc sc = {{ 0 }};
 	bool ret = false;
 	peers = mallocarray(NUM_PEERS, sizeof(*peers), M_WG, M_NOWAIT | M_ZERO);
 	if (!peers) {
@@ -446,7 +446,7 @@ static bool wg_allowedips_selftest(void)
 	struct wg_peer *a = init_peer(), *b = init_peer(), *c = init_peer(),
 		       *d = init_peer(), *e = init_peer(), *f = init_peer(),
 		       *g = init_peer(), *h = init_peer();
-	struct wg_softc sc = { 0 };
+	struct wg_softc sc = {{ 0 }};
 	struct wg_aip *iter_node;
 	size_t i = 0, count = 0;
 	bool success = false;
