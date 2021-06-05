@@ -45,7 +45,7 @@ struct cookie_checker {
 	uint8_t		cc_mac1_key[COOKIE_KEY_SIZE];
 	uint8_t		cc_cookie_key[COOKIE_KEY_SIZE];
 
-	struct rwlock	cc_secret_lock;
+	struct mtx	cc_secret_mtx;
 	sbintime_t	cc_secret_birthdate;	/* sbinuptime */
 	uint8_t		cc_secret[COOKIE_SECRET_SIZE];
 };

@@ -47,7 +47,7 @@ struct ratelimit_entry {
 
 struct ratelimit {
 	uint8_t				rl_secret[SIPHASH_KEY_LENGTH];
-	struct rwlock			rl_lock;
+	struct mtx			rl_mtx;
 	struct callout			rl_gc;
 	LIST_HEAD(, ratelimit_entry)	rl_table[RATELIMIT_SIZE];
 	size_t				rl_table_num;
@@ -107,14 +107,14 @@ cookie_checker_init(struct cookie_checker *cc)
 	bzero(cc, sizeof(*cc));
 
 	rw_init(&cc->cc_key_lock, "cookie_checker_key");
-	rw_init(&cc->cc_secret_lock, "cookie_checker_secret");
+	mtx_init(&cc->cc_secret_mtx, "cookie_checker_secret", NULL, MTX_DEF);
 }
 
 void
 cookie_checker_free(struct cookie_checker *cc)
 {
 	rw_destroy(&cc->cc_key_lock);
-	rw_destroy(&cc->cc_secret_lock);
+	mtx_destroy(&cc->cc_secret_mtx);
 	explicit_bzero(cc, sizeof(*cc));
 }
 
@@ -307,7 +307,7 @@ make_cookie(struct cookie_checker *cc, uint8_t cookie[COOKIE_COOKIE_SIZE],
 {
 	struct blake2s_state state;
 
-	rw_wlock(&cc->cc_secret_lock);
+	mtx_lock(&cc->cc_secret_mtx);
 	if (timer_expired(cc->cc_secret_birthdate,
 	    COOKIE_SECRET_MAX_AGE, 0)) {
 		arc4random_buf(cc->cc_secret, COOKIE_SECRET_SIZE);
@@ -315,7 +315,7 @@ make_cookie(struct cookie_checker *cc, uint8_t cookie[COOKIE_COOKIE_SIZE],
 	}
 	blake2s_init_key(&state, COOKIE_COOKIE_SIZE, cc->cc_secret,
 	    COOKIE_SECRET_SIZE);
-	rw_wunlock(&cc->cc_secret_lock);
+	mtx_unlock(&cc->cc_secret_mtx);
 
 	if (sa->sa_family == AF_INET) {
 		blake2s_update(&state, (uint8_t *)&satosin(sa)->sin_addr,
@@ -340,8 +340,8 @@ static void
 ratelimit_init(struct ratelimit *rl)
 {
 	size_t i;
-	rw_init(&rl->rl_lock, "ratelimit_lock");
-	callout_init_rw(&rl->rl_gc, &rl->rl_lock, 0);
+	mtx_init(&rl->rl_mtx, "ratelimit_lock", NULL, MTX_DEF);
+	callout_init_rw(&rl->rl_gc, &rl->rl_mtx, 0);
 	arc4random_buf(rl->rl_secret, sizeof(rl->rl_secret));
 	for (i = 0; i < RATELIMIT_SIZE; i++)
 		LIST_INIT(&rl->rl_table[i]);
@@ -351,17 +351,17 @@ ratelimit_init(struct ratelimit *rl)
 static void
 ratelimit_deinit(struct ratelimit *rl)
 {
-	rw_wlock(&rl->rl_lock);
+	mtx_lock(&rl->rl_mtx);
 	callout_stop(&rl->rl_gc);
 	ratelimit_gc(rl, true);
-	rw_wunlock(&rl->rl_lock);
-	rw_destroy(&rl->rl_lock);
+	mtx_unlock(&rl->rl_mtx);
+	mtx_destroy(&rl->rl_mtx);
 }
 
 static void
 ratelimit_gc_callout(void *_rl)
 {
-	/* callout will wlock rl_lock for us */
+	/* callout will lock rl_mtx for us */
 	ratelimit_gc(_rl, false);
 }
 
@@ -386,7 +386,7 @@ ratelimit_gc(struct ratelimit *rl, bool force)
 	struct ratelimit_entry *r, *tr;
 	sbintime_t expiry;
 
-	rw_assert(&rl->rl_lock, RA_WLOCKED);
+	mtx_assert(&rl->rl_mtx, MA_OWNED);
 
 	if (rl->rl_table_num == 0)
 		return;
@@ -428,7 +428,7 @@ ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa, struct vnet *vnet)
 		return ret;
 
 	bucket = siphash13(rl->rl_secret, &key, len) & RATELIMIT_MASK;
-	rw_wlock(&rl->rl_lock);
+	mtx_lock(&rl->rl_mtx);
 
 	LIST_FOREACH(r, &rl->rl_table[bucket], r_entry) {
 		if (bcmp(&r->r_key, &key, len) != 0)
@@ -481,7 +481,7 @@ ratelimit_allow(struct ratelimit *rl, struct sockaddr *sa, struct vnet *vnet)
 ok:
 	ret = 0;
 error:
-	rw_wunlock(&rl->rl_lock);
+	mtx_unlock(&rl->rl_mtx);
 	return ret;
 }
 

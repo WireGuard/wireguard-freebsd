@@ -111,7 +111,7 @@ struct noise_remote {
 	struct noise_local		*r_local;
 	void				*r_arg;
 
-	struct rwlock			 r_keypair_lock;
+	struct mtx			 r_keypair_mtx;
 	struct noise_keypair		*r_next, *r_current, *r_previous;
 
 	struct epoch_context		 r_smr;
@@ -129,11 +129,11 @@ struct noise_local {
 	void				*l_arg;
 	void				(*l_cleanup)(struct noise_local *);
 
-	struct rwlock			 l_remote_lock;
+	struct mtx			 l_remote_mtx;
 	size_t				 l_remote_num;
 	CK_LIST_HEAD(,noise_remote)	 l_remote_hash[HT_REMOTE_SIZE];
 
-	struct rwlock			 l_index_lock;
+	struct mtx			 l_index_mtx;
 	CK_LIST_HEAD(,noise_index)	 l_index_hash[HT_INDEX_SIZE];
 };
 
@@ -195,12 +195,12 @@ noise_local_alloc(void *arg)
 	l->l_arg = arg;
 	l->l_cleanup = NULL;
 
-	rw_init(&l->l_remote_lock, "noise_remote");
+	mtx_init(&l->l_remote_mtx, "noise_remote", NULL, MTX_DEF);
 	l->l_remote_num = 0;
 	for (i = 0; i < HT_REMOTE_SIZE; i++)
 		CK_LIST_INIT(&l->l_remote_hash[i]);
 
-	rw_init(&l->l_index_lock, "noise_index");
+	mtx_init(&l->l_index_mtx, "noise_index", NULL, MTX_DEF);
 	for (i = 0; i < HT_INDEX_SIZE; i++)
 		CK_LIST_INIT(&l->l_index_hash[i]);
 
@@ -221,8 +221,8 @@ noise_local_put(struct noise_local *l)
 		if (l->l_cleanup != NULL)
 			l->l_cleanup(l);
 		rw_destroy(&l->l_identity_lock);
-		rw_destroy(&l->l_remote_lock);
-		rw_destroy(&l->l_index_lock);
+		mtx_destroy(&l->l_remote_mtx);
+		mtx_destroy(&l->l_index_mtx);
 		explicit_bzero(l, sizeof(*l));
 		free(l, M_NOISE);
 	}
@@ -311,7 +311,7 @@ noise_remote_alloc(struct noise_local *l, void *arg,
 	r->r_local = noise_local_ref(l);
 	r->r_arg = arg;
 
-	rw_init(&r->r_keypair_lock, "noise_keypair");
+	mtx_init(&r->r_keypair_mtx, "noise_keypair", NULL, MTX_DEF);
 
 	return (r);
 }
@@ -326,7 +326,7 @@ noise_remote_enable(struct noise_remote *r)
 	/* Insert to hashtable */
 	idx = siphash24(l->l_hash_key, r->r_public, NOISE_PUBLIC_KEY_LEN) & HT_REMOTE_MASK;
 
-	rw_wlock(&l->l_remote_lock);
+	mtx_lock(&l->l_remote_mtx);
 	if (!r->r_entry_inserted) {
 		if (l->l_remote_num < MAX_REMOTE_PER_LOCAL) {
 			r->r_entry_inserted = true;
@@ -336,7 +336,7 @@ noise_remote_enable(struct noise_remote *r)
 			ret = ENOSPC;
 		}
 	}
-	rw_wunlock(&l->l_remote_lock);
+	mtx_unlock(&l->l_remote_mtx);
 
 	return ret;
 }
@@ -346,13 +346,13 @@ noise_remote_disable(struct noise_remote *r)
 {
 	struct noise_local *l = r->r_local;
 	/* remove from hashtable */
-	rw_wlock(&l->l_remote_lock);
+	mtx_lock(&l->l_remote_mtx);
 	if (r->r_entry_inserted) {
 		r->r_entry_inserted = false;
 		CK_LIST_REMOVE(r, r_entry);
 		l->l_remote_num--;
 	};
-	rw_wunlock(&l->l_remote_lock);
+	mtx_unlock(&l->l_remote_mtx);
 }
 
 struct noise_remote *
@@ -394,15 +394,15 @@ assign_id:
 			goto assign_id;
 	}
 
-	rw_wlock(&l->l_index_lock);
+	mtx_lock(&l->l_index_mtx);
 	CK_LIST_FOREACH(i, &l->l_index_hash[idx], i_entry) {
 		if (i->i_local_index == r_i->i_local_index) {
-			rw_wunlock(&l->l_index_lock);
+			mtx_unlock(&l->l_index_mtx);
 			goto assign_id;
 		}
 	}
 	CK_LIST_INSERT_HEAD(&l->l_index_hash[idx], r_i, i_entry);
-	rw_wunlock(&l->l_index_lock);
+	mtx_unlock(&l->l_index_mtx);
 
 	NET_EPOCH_EXIT(et);
 }
@@ -447,10 +447,10 @@ noise_remote_index_remove(struct noise_local *l, struct noise_remote *r)
 {
 	rw_assert(&r->r_handshake_lock, RA_WLOCKED);
 	if (r->r_handshake_state != HANDSHAKE_DEAD) {
-		rw_wlock(&l->l_index_lock);
+		mtx_lock(&l->l_index_mtx);
 		r->r_handshake_state = HANDSHAKE_DEAD;
 		CK_LIST_REMOVE(&r->r_index, i_entry);
-		rw_wunlock(&l->l_index_lock);
+		mtx_unlock(&l->l_index_mtx);
 		return (1);
 	}
 	return (0);
@@ -472,7 +472,7 @@ noise_remote_smr_free(struct epoch_context *smr)
 		r->r_cleanup(r);
 	noise_local_put(r->r_local);
 	rw_destroy(&r->r_handshake_lock);
-	rw_destroy(&r->r_keypair_lock);
+	mtx_destroy(&r->r_keypair_mtx);
 	explicit_bzero(r, sizeof(*r));
 	free(r, M_NOISE);
 }
@@ -564,7 +564,7 @@ noise_remote_keypairs_clear(struct noise_remote *r)
 {
 	struct noise_keypair *kp;
 
-	rw_wlock(&r->r_keypair_lock);
+	mtx_lock(&r->r_keypair_mtx);
 	kp = ck_pr_load_ptr(&r->r_next);
 	ck_pr_store_ptr(&r->r_next, NULL);
 	noise_keypair_drop(kp);
@@ -576,7 +576,7 @@ noise_remote_keypairs_clear(struct noise_remote *r)
 	kp = ck_pr_load_ptr(&r->r_previous);
 	ck_pr_store_ptr(&r->r_previous, NULL);
 	noise_keypair_drop(kp);
-	rw_wunlock(&r->r_keypair_lock);
+	mtx_unlock(&r->r_keypair_mtx);
 }
 
 static void
@@ -606,7 +606,7 @@ noise_add_new_keypair(struct noise_local *l, struct noise_remote *r,
 	struct noise_index *r_i = &r->r_index;
 
 	/* Insert into the keypair table */
-	rw_wlock(&r->r_keypair_lock);
+	mtx_lock(&r->r_keypair_mtx);
 	next = ck_pr_load_ptr(&r->r_next);
 	current = ck_pr_load_ptr(&r->r_current);
 	previous = ck_pr_load_ptr(&r->r_previous);
@@ -628,7 +628,7 @@ noise_add_new_keypair(struct noise_local *l, struct noise_remote *r,
 		noise_keypair_drop(previous);
 
 	}
-	rw_wunlock(&r->r_keypair_lock);
+	mtx_unlock(&r->r_keypair_mtx);
 
 	/* Insert into index table */
 	rw_assert(&r->r_handshake_lock, RA_WLOCKED);
@@ -637,11 +637,11 @@ noise_add_new_keypair(struct noise_local *l, struct noise_remote *r,
 	kp->kp_index.i_local_index = r_i->i_local_index;
 	kp->kp_index.i_remote_index = r_i->i_remote_index;
 
-	rw_wlock(&l->l_index_lock);
+	mtx_lock(&l->l_index_mtx);
 	CK_LIST_INSERT_BEFORE(r_i, &kp->kp_index, i_entry);
 	r->r_handshake_state = HANDSHAKE_DEAD;
 	CK_LIST_REMOVE(r_i, i_entry);
-	rw_wunlock(&l->l_index_lock);
+	mtx_unlock(&l->l_index_mtx);
 
 	explicit_bzero(&r->r_handshake, sizeof(r->r_handshake));
 }
@@ -732,9 +732,9 @@ noise_keypair_received_with(struct noise_keypair *kp)
 	if (kp != ck_pr_load_ptr(&r->r_next))
 		return (0);
 
-	rw_wlock(&r->r_keypair_lock);
+	mtx_lock(&r->r_keypair_mtx);
 	if (kp != ck_pr_load_ptr(&r->r_next)) {
-		rw_wunlock(&r->r_keypair_lock);
+		mtx_unlock(&r->r_keypair_mtx);
 		return (0);
 	}
 
@@ -743,7 +743,7 @@ noise_keypair_received_with(struct noise_keypair *kp)
 	noise_keypair_drop(old);
 	ck_pr_store_ptr(&r->r_current, kp);
 	ck_pr_store_ptr(&r->r_next, NULL);
-	rw_wunlock(&r->r_keypair_lock);
+	mtx_unlock(&r->r_keypair_mtx);
 
 	return (ECONNRESET);
 }
@@ -778,9 +778,9 @@ noise_keypair_drop(struct noise_keypair *kp)
 	r = kp->kp_remote;
 	l = r->r_local;
 
-	rw_wlock(&l->l_index_lock);
+	mtx_lock(&l->l_index_mtx);
 	CK_LIST_REMOVE(&kp->kp_index, i_entry);
-	rw_wunlock(&l->l_index_lock);
+	mtx_unlock(&l->l_index_mtx);
 
 	noise_keypair_put(kp);
 }
