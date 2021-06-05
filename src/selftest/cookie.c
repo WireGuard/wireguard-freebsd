@@ -292,6 +292,8 @@ cookie_mac_test(void)
 	T_PASSED;
 	ret = true;
 cleanup:
+	cookie_checker_free(&checker);
+	cookie_maker_free(&maker);
 	return ret;
 }
 

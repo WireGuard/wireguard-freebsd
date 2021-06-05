@@ -234,7 +234,6 @@ struct wg_peer {
 };
 
 struct wg_socket {
-	struct mtx	 so_mtx;
 	struct socket	*so_so4;
 	struct socket	*so_so6;
 	uint32_t	 so_user_cookie;
@@ -483,6 +482,9 @@ wg_peer_free_deferred(struct noise_remote *r)
 	counter_u64_free(peer->p_tx_bytes);
 	counter_u64_free(peer->p_rx_bytes);
 	rw_destroy(&peer->p_endpoint_lock);
+	mtx_destroy(&peer->p_handshake_mtx);
+
+	cookie_maker_free(&peer->p_cookie);
 
 	free(peer, M_WG);
 }
@@ -2890,6 +2892,8 @@ wg_clone_destroy(struct ifnet *ifp)
 	RADIX_NODE_HEAD_DESTROY(sc->sc_aip6);
 	rn_detachhead((void **)&sc->sc_aip4);
 	rn_detachhead((void **)&sc->sc_aip6);
+
+	cookie_checker_free(&sc->sc_cookie);
 
 	if (cred != NULL)
 		crfree(cred);

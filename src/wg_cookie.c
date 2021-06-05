@@ -111,6 +111,14 @@ cookie_checker_init(struct cookie_checker *cc)
 }
 
 void
+cookie_checker_free(struct cookie_checker *cc)
+{
+	rw_destroy(&cc->cc_key_lock);
+	rw_destroy(&cc->cc_secret_lock);
+	explicit_bzero(cc, sizeof(*cc));
+}
+
+void
 cookie_checker_update(struct cookie_checker *cc,
     const uint8_t key[COOKIE_INPUT_SIZE])
 {
@@ -150,6 +158,13 @@ cookie_maker_init(struct cookie_maker *cm, const uint8_t key[COOKIE_INPUT_SIZE])
 	precompute_key(cm->cm_mac1_key, key, COOKIE_MAC1_KEY_LABEL);
 	precompute_key(cm->cm_cookie_key, key, COOKIE_COOKIE_KEY_LABEL);
 	rw_init(&cm->cm_lock, "cookie_maker");
+}
+
+void
+cookie_maker_free(struct cookie_maker *cm)
+{
+	rw_destroy(&cm->cm_lock);
+	explicit_bzero(cm, sizeof(*cm));
 }
 
 int
@@ -340,6 +355,7 @@ ratelimit_deinit(struct ratelimit *rl)
 	callout_stop(&rl->rl_gc);
 	ratelimit_gc(rl, true);
 	rw_wunlock(&rl->rl_lock);
+	rw_destroy(&rl->rl_lock);
 }
 
 static void
