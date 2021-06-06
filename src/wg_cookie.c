@@ -94,11 +94,11 @@ cookie_init(void)
 void
 cookie_deinit(void)
 {
-	uma_zdestroy(ratelimit_zone);
 	ratelimit_deinit(&ratelimit_v4);
 #ifdef INET6
 	ratelimit_deinit(&ratelimit_v6);
 #endif
+	uma_zdestroy(ratelimit_zone);
 }
 
 void
