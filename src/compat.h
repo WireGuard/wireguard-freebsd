@@ -8,7 +8,7 @@
 
 #include <sys/param.h>
 
-#if __FreeBSD_version < 1400000
+#if __FreeBSD_version < 1300507
 #include <sys/smp.h>
 #include <sys/gtaskqueue.h>
 
