@@ -5,9 +5,15 @@
 
 #include <sys/types.h>
 #include <sys/endian.h>
+#include <sys/malloc.h>
 #include <sys/systm.h>
+#include <opencrypto/cryptodev.h>
 
 #include "crypto.h"
+
+#ifdef OCF_CHACHA20_POLY1305
+static crypto_session_t chacha20_poly1305_sid;
+#endif
 
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
@@ -587,6 +593,63 @@ chacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
 	return ret;
 }
 
+#ifdef OCF_CHACHA20_POLY1305
+static int
+crypto_callback(struct cryptop *crp)
+{
+	return (0);
+}
+
+int
+chacha20poly1305_encrypt_mbuf(struct mbuf *m, const uint64_t nonce,
+			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
+{
+	static char blank_tag[POLY1305_HASH_LEN];
+	struct cryptop crp;
+	int error;
+
+	if (!m_append(m, POLY1305_HASH_LEN, blank_tag))
+		return (ENOMEM);
+	crypto_initreq(&crp, chacha20_poly1305_sid);
+	crp.crp_op = CRYPTO_OP_ENCRYPT | CRYPTO_OP_COMPUTE_DIGEST;
+	crp.crp_flags = CRYPTO_F_IV_SEPARATE | CRYPTO_F_CBIMM;
+	crypto_use_mbuf(&crp, m);
+	crp.crp_payload_length = m->m_pkthdr.len - POLY1305_HASH_LEN;
+	crp.crp_digest_start = crp.crp_payload_length;
+	le64enc(crp.crp_iv, nonce);
+	crp.crp_cipher_key = key;
+	crp.crp_callback = crypto_callback;
+	error = crypto_dispatch(&crp);
+	crypto_destroyreq(&crp);
+	return (error);
+}
+
+int
+chacha20poly1305_decrypt_mbuf(struct mbuf *m, const uint64_t nonce,
+			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
+{
+	struct cryptop crp;
+	int error;
+
+	if (m->m_pkthdr.len < POLY1305_HASH_LEN)
+		return (EMSGSIZE);
+	crypto_initreq(&crp, chacha20_poly1305_sid);
+	crp.crp_op = CRYPTO_OP_DECRYPT | CRYPTO_OP_VERIFY_DIGEST;
+	crp.crp_flags = CRYPTO_F_IV_SEPARATE | CRYPTO_F_CBIMM;
+	crypto_use_mbuf(&crp, m);
+	crp.crp_payload_length = m->m_pkthdr.len - POLY1305_HASH_LEN;
+	crp.crp_digest_start = crp.crp_payload_length;
+	le64enc(crp.crp_iv, nonce);
+	crp.crp_cipher_key = key;
+	crp.crp_callback = crypto_callback;
+	error = crypto_dispatch(&crp);
+	crypto_destroyreq(&crp);
+	if (error != 0)
+		return (error);
+	m_adj(m, -POLY1305_HASH_LEN);
+	return (0);
+}
+#else
 static inline int
 chacha20poly1305_crypt_mbuf(struct mbuf *m0, uint64_t nonce,
 			    const uint8_t key[CHACHA20POLY1305_KEY_SIZE], bool encrypt)
@@ -678,6 +741,7 @@ chacha20poly1305_decrypt_mbuf(struct mbuf *m, const uint64_t nonce,
 {
 	return chacha20poly1305_crypt_mbuf(m, nonce, key, false);
 }
+#endif
 
 void
 xchacha20poly1305_encrypt(uint8_t *dst, const uint8_t *src,
@@ -1783,4 +1847,33 @@ bool curve25519(uint8_t out[CURVE25519_KEY_SIZE],
 	explicit_bzero(&e, sizeof(e));
 
 	return timingsafe_bcmp(out, curve25519_null_point, CURVE25519_KEY_SIZE) != 0;
+}
+
+int
+crypto_init(void)
+{
+#ifdef OCF_CHACHA20_POLY1305
+	struct crypto_session_params csp;
+	int error;
+
+	memset(&csp, 0, sizeof(csp));
+	csp.csp_mode = CSP_MODE_AEAD;
+	csp.csp_ivlen = sizeof(uint64_t);
+	csp.csp_cipher_alg = CRYPTO_CHACHA20_POLY1305;
+	csp.csp_cipher_klen = CHACHA20POLY1305_KEY_SIZE;
+	csp.csp_flags = CSP_F_SEPARATE_AAD | CSP_F_SEPARATE_OUTPUT;
+	error = crypto_newsession(&chacha20_poly1305_sid, &csp,
+	    CRYPTOCAP_F_SOFTWARE);
+	if (error != 0)
+		return (error);
+#endif
+	return (0);
+}
+
+void
+crypto_deinit(void)
+{
+#ifdef OCF_CHACHA20_POLY1305
+	crypto_freesession(chacha20_poly1305_sid);
+#endif
 }

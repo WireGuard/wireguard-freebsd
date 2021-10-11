@@ -6,8 +6,13 @@
 #ifndef _WG_CRYPTO
 #define _WG_CRYPTO
 
-#include <sys/types.h>
+#include <sys/param.h>
 #include <sys/mbuf.h>
+
+#if __FreeBSD_version >= 1400036 || \
+    (__FreeBSD_version < 1400000 && __FreeBSD_version >= 1300519)
+#define	OCF_CHACHA20_POLY1305
+#endif
 
 enum chacha20poly1305_lengths {
 	XCHACHA20POLY1305_NONCE_SIZE = 24,
@@ -108,5 +113,8 @@ static inline void curve25519_generate_secret(uint8_t secret[CURVE25519_KEY_SIZE
 	arc4random_buf(secret, CURVE25519_KEY_SIZE);
 	curve25519_clamp_secret(secret);
 }
+
+int	crypto_init(void);
+void	crypto_deinit(void);
 
 #endif
