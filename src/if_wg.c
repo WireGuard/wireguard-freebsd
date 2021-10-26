@@ -1676,10 +1676,10 @@ wg_deliver_out(struct wg_peer *peer)
 
 		len = m->m_pkthdr.len;
 
+		wg_timers_event_any_authenticated_packet_traversal(peer);
+		wg_timers_event_any_authenticated_packet_sent(peer);
 		rc = wg_send(sc, &endpoint, m);
 		if (rc == 0) {
-			wg_timers_event_any_authenticated_packet_traversal(peer);
-			wg_timers_event_any_authenticated_packet_sent(peer);
 			if (len > (sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN))
 				wg_timers_event_data_sent(peer);
 			counter_u64_add(peer->p_tx_bytes, len);
