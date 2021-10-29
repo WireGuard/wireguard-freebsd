@@ -572,6 +572,7 @@ wg_aip_add(struct wg_softc *sc, struct wg_peer *peer, sa_family_t af, const void
 		aip->a_addr.ip &= aip->a_mask.ip;
 		aip->a_addr.length = aip->a_mask.length = offsetof(struct aip_addr, in) + sizeof(struct in_addr);
 		break;
+#ifdef INET6
 	case AF_INET6:
 		if (cidr > 128) cidr = 128;
 		root = sc->sc_aip6;
@@ -581,6 +582,7 @@ wg_aip_add(struct wg_softc *sc, struct wg_peer *peer, sa_family_t af, const void
 			aip->a_addr.ip6[i] &= aip->a_mask.ip6[i];
 		aip->a_addr.length = aip->a_mask.length = offsetof(struct aip_addr, in6) + sizeof(struct in6_addr);
 		break;
+#endif
 	default:
 		free(aip, M_WG);
 		return (EAFNOSUPPORT);
@@ -2554,10 +2556,13 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 					if (aip->a_af == AF_INET) {
 						nvlist_add_binary(nvl_aip, "ipv4", &aip->a_addr.in, sizeof(aip->a_addr.in));
 						nvlist_add_number(nvl_aip, "cidr", bitcount32(aip->a_mask.ip));
-					} else if (aip->a_af == AF_INET6) {
+					}
+#ifdef INET6
+					else if (aip->a_af == AF_INET6) {
 						nvlist_add_binary(nvl_aip, "ipv6", &aip->a_addr.in6, sizeof(aip->a_addr.in6));
 						nvlist_add_number(nvl_aip, "cidr", in6_mask2len(&aip->a_mask.in6, NULL));
 					}
+#endif
 				}
 				nvlist_add_nvlist_array(nvl_peer, "allowed-ips", (const nvlist_t *const *)nvl_aips, aip_count);
 			err_aip:
