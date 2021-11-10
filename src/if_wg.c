@@ -1867,9 +1867,9 @@ wg_queue_enlist_staged(struct wg_queue *staged, struct wg_packet_list *list)
 static void
 wg_queue_delist_staged(struct wg_queue *staged, struct wg_packet_list *list)
 {
+	STAILQ_INIT(list);
 	mtx_lock(&staged->q_mtx);
-	*list = staged->q_queue;
-	STAILQ_INIT(&staged->q_queue);
+	STAILQ_CONCAT(list, &staged->q_queue);
 	staged->q_len = 0;
 	mtx_unlock(&staged->q_mtx);
 }
