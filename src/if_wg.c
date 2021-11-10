@@ -1804,11 +1804,7 @@ wg_queue_deinit(struct wg_queue *queue)
 static size_t
 wg_queue_len(struct wg_queue *queue)
 {
-	size_t len;
-	mtx_lock(&queue->q_mtx);
-	len = queue->q_len;
-	mtx_unlock(&queue->q_mtx);
-	return (len);
+	return (queue->q_len);
 }
 
 static int
