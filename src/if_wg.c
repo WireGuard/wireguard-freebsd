@@ -265,6 +265,8 @@ struct wg_softc {
 	struct grouptask	*sc_decrypt;
 	struct wg_queue		 sc_encrypt_parallel;
 	struct wg_queue		 sc_decrypt_parallel;
+	u_int			 sc_encrypt_last_cpu;
+	u_int			 sc_decrypt_last_cpu;
 
 	struct sx		 sc_lock;
 };
@@ -1639,21 +1641,22 @@ wg_softc_encrypt(struct wg_softc *sc)
 static void
 wg_encrypt_dispatch(struct wg_softc *sc)
 {
-	for (int i = 0; i < mp_ncpus; i++) {
-		if (sc->sc_encrypt[i].gt_task.ta_flags & TASK_ENQUEUED)
-			continue;
-		GROUPTASK_ENQUEUE(&sc->sc_encrypt[i]);
-	}
+	/*
+	 * The update to encrypt_last_cpu is racey such that we may
+	 * reschedule the task for the same CPU multiple times, but
+	 * the race doesn't really matter.
+	 */
+	u_int cpu = (sc->sc_encrypt_last_cpu + 1) % mp_ncpus;
+	sc->sc_encrypt_last_cpu = cpu;
+	GROUPTASK_ENQUEUE(&sc->sc_encrypt[cpu]);
 }
 
 static void
 wg_decrypt_dispatch(struct wg_softc *sc)
 {
-	for (int i = 0; i < mp_ncpus; i++) {
-		if (sc->sc_decrypt[i].gt_task.ta_flags & TASK_ENQUEUED)
-			continue;
-		GROUPTASK_ENQUEUE(&sc->sc_decrypt[i]);
-	}
+	u_int cpu = (sc->sc_decrypt_last_cpu + 1) % mp_ncpus;
+	sc->sc_decrypt_last_cpu = cpu;
+	GROUPTASK_ENQUEUE(&sc->sc_decrypt[cpu]);
 }
 
 static void
