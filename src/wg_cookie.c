@@ -341,7 +341,7 @@ ratelimit_init(struct ratelimit *rl)
 {
 	size_t i;
 	mtx_init(&rl->rl_mtx, "ratelimit_lock", NULL, MTX_DEF);
-	callout_init_rw(&rl->rl_gc, &rl->rl_mtx, 0);
+	callout_init_mtx(&rl->rl_gc, &rl->rl_mtx, 0);
 	arc4random_buf(rl->rl_secret, sizeof(rl->rl_secret));
 	for (i = 0; i < RATELIMIT_SIZE; i++)
 		LIST_INIT(&rl->rl_table[i]);
