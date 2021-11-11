@@ -2736,17 +2736,13 @@ wg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 	struct wg_softc *sc;
 	struct ifnet *ifp;
 
-	if ((sc = malloc(sizeof(*sc), M_WG, M_NOWAIT | M_ZERO)) == NULL)
-		goto free_none;
+	sc = malloc(sizeof(*sc), M_WG, M_WAITOK | M_ZERO);
 
-	if ((sc->sc_local = noise_local_alloc(sc)) == NULL)
-		goto free_sc;
+	sc->sc_local = noise_local_alloc(sc);
 
-	if ((sc->sc_encrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_NOWAIT | M_ZERO)) == NULL)
-		goto free_local;
+	sc->sc_encrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_WAITOK | M_ZERO);
 
-	if ((sc->sc_decrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_NOWAIT | M_ZERO)) == NULL)
-		goto free_encrypt;
+	sc->sc_decrypt = mallocarray(sizeof(struct grouptask), mp_ncpus, M_WG, M_WAITOK | M_ZERO);
 
 	if (!rn_inithead((void **)&sc->sc_aip4, offsetof(struct aip_addr, in) * NBBY))
 		goto free_decrypt;
@@ -2814,13 +2810,9 @@ free_aip4:
 	free(sc->sc_aip4, M_RTABLE);
 free_decrypt:
 	free(sc->sc_decrypt, M_WG);
-free_encrypt:
 	free(sc->sc_encrypt, M_WG);
-free_local:
 	noise_local_free(sc->sc_local, NULL);
-free_sc:
 	free(sc, M_WG);
-free_none:
 	return (ENOMEM);
 }
 
