@@ -409,18 +409,10 @@ wg_peer_alloc(struct wg_softc *sc, const uint8_t pub_key[WG_KEY_SIZE])
 
 	sx_assert(&sc->sc_lock, SX_XLOCKED);
 
-	if ((peer = malloc(sizeof(*peer), M_WG, M_NOWAIT | M_ZERO)) == NULL)
-		goto free_none;
-
-	if ((peer->p_remote = noise_remote_alloc(sc->sc_local, peer, pub_key)) == NULL)
-		goto free_peer;
-
-	if ((peer->p_tx_bytes = counter_u64_alloc(M_NOWAIT)) == NULL)
-		goto free_remote;
-
-	if ((peer->p_rx_bytes = counter_u64_alloc(M_NOWAIT)) == NULL)
-		goto free_tx_bytes;
-
+	peer = malloc(sizeof(*peer), M_WG, M_WAITOK | M_ZERO);
+	peer->p_remote = noise_remote_alloc(sc->sc_local, peer, pub_key);
+	peer->p_tx_bytes = counter_u64_alloc(M_WAITOK);
+	peer->p_rx_bytes = counter_u64_alloc(M_WAITOK);
 	peer->p_id = peer_counter++;
 	peer->p_sc = sc;
 
@@ -454,14 +446,6 @@ wg_peer_alloc(struct wg_softc *sc, const uint8_t pub_key[WG_KEY_SIZE])
 	peer->p_aips_num = 0;
 
 	return (peer);
-free_tx_bytes:
-	counter_u64_free(peer->p_tx_bytes);
-free_remote:
-	noise_remote_free(peer->p_remote, NULL);
-free_peer:
-	free(peer, M_WG);
-free_none:
-	return NULL;
 }
 
 static void
@@ -560,8 +544,7 @@ wg_aip_add(struct wg_softc *sc, struct wg_peer *peer, sa_family_t af, const void
 	struct wg_aip		*aip;
 	int			 i, ret = 0;
 
-	if ((aip = malloc(sizeof(*aip), M_WG, M_NOWAIT | M_ZERO)) == NULL)
-		return (ENOBUFS);
+	aip = malloc(sizeof(*aip), M_WG, M_WAITOK | M_ZERO);
 	aip->a_peer = peer;
 	aip->a_af = af;
 
@@ -2279,10 +2262,7 @@ wg_peer_add(struct wg_softc *sc, const nvlist_t *nvl)
 		wg_aip_remove_all(sc, peer);
 	}
 	if (peer == NULL) {
-		if ((peer = wg_peer_alloc(sc, pub_key)) == NULL) {
-			err = ENOMEM;
-			goto out;
-		}
+		peer = wg_peer_alloc(sc, pub_key);
 		need_insert = true;
 	}
 	if (nvlist_exists_binary(nvl, "endpoint")) {

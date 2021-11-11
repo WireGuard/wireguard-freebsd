@@ -295,8 +295,7 @@ noise_remote_alloc(struct noise_local *l, void *arg,
 {
 	struct noise_remote *r;
 
-	if ((r = malloc(sizeof(*r), M_NOISE, M_NOWAIT | M_ZERO)) == NULL)
-		return (NULL);
+	r = malloc(sizeof(*r), M_NOISE, M_WAITOK | M_ZERO);
 	memcpy(r->r_public, public, NOISE_PUBLIC_KEY_LEN);
 
 	rw_init(&r->r_handshake_lock, "noise_handshake");
