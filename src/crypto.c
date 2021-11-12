@@ -39,6 +39,7 @@ static inline uint32_t get_unaligned_le32(const uint8_t *a)
 	__builtin_memcpy(&l, a, sizeof(l));
 	return le32_to_cpup(&l);
 }
+#if !defined(OCF_CHACHA20_POLY1305) || !defined(KERNEL_CHACHA20_POLY1305)
 static inline uint64_t get_unaligned_le64(const uint8_t *a)
 {
 	uint64_t l;
@@ -50,6 +51,7 @@ static inline void put_unaligned_le32(uint32_t s, uint8_t *d)
 	uint32_t l = cpu_to_le32(s);
 	__builtin_memcpy(d, &l, sizeof(l));
 }
+#endif
 static inline void cpu_to_le32_array(uint32_t *buf, unsigned int words)
 {
         while (words--) {
@@ -65,15 +67,18 @@ static inline void le32_to_cpu_array(uint32_t *buf, unsigned int words)
         }
 }
 
+#if !defined(OCF_CHACHA20_POLY1305) || !defined(KERNEL_CHACHA20_POLY1305)
 static inline uint32_t rol32(uint32_t word, unsigned int shift)
 {
         return (word << (shift & 31)) | (word >> ((-shift) & 31));
 }
+#endif
 static inline uint32_t ror32(uint32_t word, unsigned int shift)
 {
 	return (word >> (shift & 31)) | (word << ((-shift) & 31));
 }
 
+#if !defined(OCF_CHACHA20_POLY1305) || !defined(KERNEL_CHACHA20_POLY1305)
 static void xor_cpy(uint8_t *dst, const uint8_t *src1, const uint8_t *src2,
 		    size_t len)
 {
@@ -511,7 +516,9 @@ static void poly1305_final(struct poly1305_ctx *ctx,
 
 
 static const uint8_t pad0[16] = { 0 };
+#endif
 
+#ifndef KERNEL_CHACHA20_POLY1305
 void
 chacha20poly1305_encrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
 			 const uint8_t *ad, const size_t ad_len,
@@ -592,6 +599,7 @@ chacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
 
 	return ret;
 }
+#endif
 
 #ifdef OCF_CHACHA20_POLY1305
 static int
@@ -743,6 +751,7 @@ chacha20poly1305_decrypt_mbuf(struct mbuf *m, const uint64_t nonce,
 }
 #endif
 
+#ifndef KERNEL_CHACHA20_POLY1305
 void
 xchacha20poly1305_encrypt(uint8_t *dst, const uint8_t *src,
 			  const size_t src_len, const uint8_t *ad,
@@ -778,6 +787,7 @@ xchacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src,
 	explicit_bzero(derived_key, CHACHA20POLY1305_KEY_SIZE);
 	return ret;
 }
+#endif
 
 
 static const uint32_t blake2s_iv[8] = {

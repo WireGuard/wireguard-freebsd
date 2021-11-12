@@ -14,12 +14,67 @@
 #define	OCF_CHACHA20_POLY1305
 #endif
 
+#if __FreeBSD_version >= 1400048
+#define	KERNEL_CHACHA20_POLY1305
+#endif
+
 enum chacha20poly1305_lengths {
 	XCHACHA20POLY1305_NONCE_SIZE = 24,
 	CHACHA20POLY1305_KEY_SIZE = 32,
 	CHACHA20POLY1305_AUTHTAG_SIZE = 16
 };
 
+#ifdef KERNEL_CHACHA20_POLY1305
+#include <sys/endian.h>
+#include <crypto/chacha20_poly1305.h>
+
+static __inline void
+chacha20poly1305_encrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
+			  const uint8_t *ad, const size_t ad_len,
+			  const uint64_t nonce,
+			  const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
+{
+	uint8_t nonce_bytes[8];
+
+	le64enc(nonce_bytes, nonce);
+	chacha20_poly1305_encrypt(dst, src, src_len, ad, ad_len, nonce_bytes,
+	    sizeof(nonce_bytes), key);
+}
+
+static __inline bool
+chacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
+			  const uint8_t *ad, const size_t ad_len,
+			  const uint64_t nonce,
+			  const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
+{
+	uint8_t nonce_bytes[8];
+
+	le64enc(nonce_bytes, nonce);
+	return (chacha20_poly1305_decrypt(dst, src, src_len, ad, ad_len,
+	    nonce_bytes, sizeof(nonce_bytes), key));
+}
+
+static __inline void
+xchacha20poly1305_encrypt(uint8_t *dst, const uint8_t *src,
+			  const size_t src_len, const uint8_t *ad,
+			  const size_t ad_len,
+			  const uint8_t nonce[XCHACHA20POLY1305_NONCE_SIZE],
+			  const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
+{
+	xchacha20_poly1305_encrypt(dst, src, src_len, ad, ad_len, nonce, key);
+}
+
+static __inline bool
+xchacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src,
+			  const size_t src_len,  const uint8_t *ad,
+			  const size_t ad_len,
+			  const uint8_t nonce[XCHACHA20POLY1305_NONCE_SIZE],
+			  const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
+{
+	return (xchacha20_poly1305_decrypt(dst, src, src_len, ad, ad_len, nonce,
+	    key));
+}
+#else
 void
 chacha20poly1305_encrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
 			 const uint8_t *ad, const size_t ad_len,
@@ -31,14 +86,6 @@ chacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
 			 const uint8_t *ad, const size_t ad_len,
 			 const uint64_t nonce,
 			 const uint8_t key[CHACHA20POLY1305_KEY_SIZE]);
-
-int
-chacha20poly1305_encrypt_mbuf(struct mbuf *, const uint64_t nonce,
-			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE]);
-
-int
-chacha20poly1305_decrypt_mbuf(struct mbuf *, const uint64_t nonce,
-			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE]);
 
 void
 xchacha20poly1305_encrypt(uint8_t *dst, const uint8_t *src,
@@ -53,6 +100,15 @@ xchacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src,
 			  const size_t ad_len,
 			  const uint8_t nonce[XCHACHA20POLY1305_NONCE_SIZE],
 			  const uint8_t key[CHACHA20POLY1305_KEY_SIZE]);
+#endif
+
+int
+chacha20poly1305_encrypt_mbuf(struct mbuf *, const uint64_t nonce,
+			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE]);
+
+int
+chacha20poly1305_decrypt_mbuf(struct mbuf *, const uint64_t nonce,
+			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE]);
 
 
 enum blake2s_lengths {
