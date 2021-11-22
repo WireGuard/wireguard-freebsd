@@ -33,12 +33,15 @@ static crypto_session_t chacha20_poly1305_sid;
 #define cpu_to_le32(a) htole32(a)
 #define cpu_to_le64(a) htole64(a)
 
+#if !defined(OCF_CHACHA20_POLY1305) || !defined(KERNEL_CHACHA20_POLY1305) || \
+    !defined(KERNEL_CURVE25519)
 static inline uint32_t get_unaligned_le32(const uint8_t *a)
 {
 	uint32_t l;
 	__builtin_memcpy(&l, a, sizeof(l));
 	return le32_to_cpup(&l);
 }
+#endif
 #if !defined(OCF_CHACHA20_POLY1305) || !defined(KERNEL_CHACHA20_POLY1305)
 static inline uint64_t get_unaligned_le64(const uint8_t *a)
 {
@@ -1000,6 +1003,7 @@ void blake2s_hmac(uint8_t *out, const uint8_t *in, const uint8_t *key, const siz
 }
 
 
+#ifndef KERNEL_CURVE25519
 /* Below here is fiat's implementation of x25519.
  *
  * Copyright (C) 2015-2016 The fiat-crypto Authors.
@@ -1858,6 +1862,7 @@ bool curve25519(uint8_t out[CURVE25519_KEY_SIZE],
 
 	return timingsafe_bcmp(out, curve25519_null_point, CURVE25519_KEY_SIZE) != 0;
 }
+#endif
 
 int
 crypto_init(void)

@@ -18,6 +18,10 @@
 #define	KERNEL_CHACHA20_POLY1305
 #endif
 
+#if __FreeBSD_version >= 1400049
+#define	KERNEL_CURVE25519
+#endif
+
 enum chacha20poly1305_lengths {
 	XCHACHA20POLY1305_NONCE_SIZE = 24,
 	CHACHA20POLY1305_KEY_SIZE = 32,
@@ -141,6 +145,9 @@ void blake2s(uint8_t *out, const uint8_t *in, const uint8_t *key,
 void blake2s_hmac(uint8_t *out, const uint8_t *in, const uint8_t *key,
 		  const size_t outlen, const size_t inlen, const size_t keylen);
 
+#ifdef KERNEL_CURVE25519
+#include <crypto/curve25519.h>
+#else
 enum curve25519_lengths {
         CURVE25519_KEY_SIZE = 32
 };
@@ -169,6 +176,7 @@ static inline void curve25519_generate_secret(uint8_t secret[CURVE25519_KEY_SIZE
 	arc4random_buf(secret, CURVE25519_KEY_SIZE);
 	curve25519_clamp_secret(secret);
 }
+#endif
 
 int	crypto_init(void);
 void	crypto_deinit(void);
