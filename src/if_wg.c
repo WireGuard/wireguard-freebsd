@@ -3007,10 +3007,13 @@ wg_module_init(void)
 
 	ret = ENOTRECOVERABLE;
 	if (!wg_run_selftests())
-		goto free_zone;
+		goto free_all;
 
 	return (0);
 
+free_all:
+	osd_jail_deregister(wg_osd_jail_slot);
+	cookie_deinit();
 free_zone:
 	uma_zdestroy(wg_packet_zone);
 free_none:
