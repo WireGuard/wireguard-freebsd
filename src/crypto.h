@@ -27,11 +27,11 @@ chacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
 			 const uint64_t nonce,
 			 const uint8_t key[CHACHA20POLY1305_KEY_SIZE]);
 
-bool
+int
 chacha20poly1305_encrypt_mbuf(struct mbuf *, const uint64_t nonce,
 			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE]);
 
-bool
+int
 chacha20poly1305_decrypt_mbuf(struct mbuf *, const uint64_t nonce,
 			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE]);
 

@@ -587,7 +587,7 @@ chacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
 	return ret;
 }
 
-static inline bool
+static inline int
 chacha20poly1305_crypt_mbuf(struct mbuf *m0, uint64_t nonce,
 			    const uint8_t key[CHACHA20POLY1305_KEY_SIZE], bool encrypt)
 {
@@ -596,7 +596,7 @@ chacha20poly1305_crypt_mbuf(struct mbuf *m0, uint64_t nonce,
 	uint8_t *buf, mbuf_mac[POLY1305_MAC_SIZE];
 	size_t len, leftover = 0;
 	struct mbuf *m;
-	bool ret;
+	int ret;
 	union {
 		uint32_t stream[CHACHA20_BLOCK_WORDS];
 		uint8_t block0[POLY1305_KEY_SIZE];
@@ -606,7 +606,7 @@ chacha20poly1305_crypt_mbuf(struct mbuf *m0, uint64_t nonce,
 
 	if (!encrypt) {
 		if (m0->m_pkthdr.len < POLY1305_MAC_SIZE)
-			return false;
+			return EMSGSIZE;
 		m_copydata(m0, m0->m_pkthdr.len - POLY1305_MAC_SIZE, POLY1305_MAC_SIZE, mbuf_mac);
 		m_adj(m0, -POLY1305_MAC_SIZE);
 	}
@@ -655,9 +655,9 @@ chacha20poly1305_crypt_mbuf(struct mbuf *m0, uint64_t nonce,
 	poly1305_final(&poly1305_state, b.mac);
 
 	if (encrypt)
-		ret = m_append(m0, POLY1305_MAC_SIZE, b.mac);
+		ret = m_append(m0, POLY1305_MAC_SIZE, b.mac) ? 0 : ENOMEM;
 	else
-		ret = timingsafe_bcmp(b.mac, mbuf_mac, POLY1305_MAC_SIZE) == 0;
+		ret = timingsafe_bcmp(b.mac, mbuf_mac, POLY1305_MAC_SIZE) == 0 ? 0 : EBADMSG;
 
 	explicit_bzero(&chacha20_state, sizeof(chacha20_state));
 	explicit_bzero(&b, sizeof(b));
@@ -665,14 +665,14 @@ chacha20poly1305_crypt_mbuf(struct mbuf *m0, uint64_t nonce,
 	return ret;
 }
 
-bool
+int
 chacha20poly1305_encrypt_mbuf(struct mbuf *m, const uint64_t nonce,
 			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
 {
 	return chacha20poly1305_crypt_mbuf(m, nonce, key, true);
 }
 
-bool
+int
 chacha20poly1305_decrypt_mbuf(struct mbuf *m, const uint64_t nonce,
 			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
 {

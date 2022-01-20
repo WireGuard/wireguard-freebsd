@@ -903,8 +903,11 @@ noise_keep_key_fresh_recv(struct noise_remote *r)
 int
 noise_keypair_encrypt(struct noise_keypair *kp, uint32_t *r_idx, uint64_t nonce, struct mbuf *m)
 {
-	if (chacha20poly1305_encrypt_mbuf(m, nonce, kp->kp_send) == 0)
-	       return (ENOMEM);
+	int ret;
+
+	ret = chacha20poly1305_encrypt_mbuf(m, nonce, kp->kp_send);
+	if (ret)
+		return (ret);
 
 	*r_idx = kp->kp_index.i_remote_index;
 	return (0);
@@ -914,6 +917,7 @@ int
 noise_keypair_decrypt(struct noise_keypair *kp, uint64_t nonce, struct mbuf *m)
 {
 	uint64_t cur_nonce;
+	int ret;
 
 #ifdef __LP64__
 	cur_nonce = ck_pr_load_64(&kp->kp_nonce_recv);
@@ -927,8 +931,9 @@ noise_keypair_decrypt(struct noise_keypair *kp, uint64_t nonce, struct mbuf *m)
 	    noise_timer_expired(kp->kp_birthdate, REJECT_AFTER_TIME, 0))
 		return (EINVAL);
 
-	if (chacha20poly1305_decrypt_mbuf(m, nonce, kp->kp_recv) == 0)
-		return (EINVAL);
+	ret = chacha20poly1305_decrypt_mbuf(m, nonce, kp->kp_recv);
+	if (ret)
+		return (ret);
 
 	return (0);
 }
