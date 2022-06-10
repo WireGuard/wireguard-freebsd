@@ -3043,10 +3043,10 @@ wg_module_deinit(void)
 	VNET_LIST_RLOCK();
 	VNET_FOREACH(vnet_iter) {
 		struct if_clone *clone = VNET_VNET(vnet_iter, wg_cloner);
-		if (!clone)
-			continue;
-		if_clone_detach(clone);
-		VNET_VNET(vnet_iter, wg_cloner) = NULL;
+		if (clone) {
+			if_clone_detach(clone);
+			VNET_VNET(vnet_iter, wg_cloner) = NULL;
+		}
 	}
 	VNET_LIST_RUNLOCK();
 	NET_EPOCH_WAIT();
