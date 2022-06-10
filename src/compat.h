@@ -8,6 +8,11 @@
 
 #include <sys/param.h>
 
+#if __FreeBSD_version < 1400517
+#include <sys/sockbuf.h>
+#define sbcreatecontrol(a, b, c, d, e) sbcreatecontrol(a, b, c, d)
+#endif
+
 #if __FreeBSD_version < 1300507
 #include <sys/smp.h>
 #include <sys/gtaskqueue.h>
