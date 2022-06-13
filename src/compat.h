@@ -8,6 +8,22 @@
 
 #include <sys/param.h>
 
+#if (__FreeBSD_version < 1400036 && __FreeBSD_version >= 1400000) || __FreeBSD_version < 1300519
+#define COMPAT_NEED_CHACHA20POLY1305_MBUF
+#endif
+
+#if __FreeBSD_version < 1400048
+#define COMPAT_NEED_CHACHA20POLY1305
+#endif
+
+#if __FreeBSD_version < 1400049
+#define COMPAT_NEED_CURVE25519
+#endif
+
+#if __FreeBSD_version < 0x7fffffff /* TODO: update this when implemented */
+#define COMPAT_NEED_BLAKE2S
+#endif
+
 #if __FreeBSD_version < 1400517
 #include <sys/sockbuf.h>
 #define sbcreatecontrol(a, b, c, d, e) sbcreatecontrol(a, b, c, d)

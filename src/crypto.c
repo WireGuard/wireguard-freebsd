@@ -11,7 +11,7 @@
 
 #include "crypto.h"
 
-#ifdef OCF_CHACHA20_POLY1305
+#ifndef COMPAT_NEED_CHACHA20POLY1305_MBUF
 static crypto_session_t chacha20_poly1305_sid;
 #endif
 
@@ -33,57 +33,48 @@ static crypto_session_t chacha20_poly1305_sid;
 #define cpu_to_le32(a) htole32(a)
 #define cpu_to_le64(a) htole64(a)
 
-#if !defined(OCF_CHACHA20_POLY1305) || !defined(KERNEL_CHACHA20_POLY1305) || \
-    !defined(KERNEL_CURVE25519)
-static inline uint32_t get_unaligned_le32(const uint8_t *a)
+static inline __unused uint32_t get_unaligned_le32(const uint8_t *a)
 {
 	uint32_t l;
 	__builtin_memcpy(&l, a, sizeof(l));
 	return le32_to_cpup(&l);
 }
-#endif
-#if !defined(OCF_CHACHA20_POLY1305) || !defined(KERNEL_CHACHA20_POLY1305)
-static inline uint64_t get_unaligned_le64(const uint8_t *a)
+static inline __unused uint64_t get_unaligned_le64(const uint8_t *a)
 {
 	uint64_t l;
 	__builtin_memcpy(&l, a, sizeof(l));
 	return le64_to_cpup(&l);
 }
-static inline void put_unaligned_le32(uint32_t s, uint8_t *d)
+static inline __unused void put_unaligned_le32(uint32_t s, uint8_t *d)
 {
 	uint32_t l = cpu_to_le32(s);
 	__builtin_memcpy(d, &l, sizeof(l));
 }
-#endif
-static inline void cpu_to_le32_array(uint32_t *buf, unsigned int words)
+static inline __unused void cpu_to_le32_array(uint32_t *buf, unsigned int words)
 {
         while (words--) {
 		*buf = cpu_to_le32(*buf);
 		++buf;
 	}
 }
-static inline void le32_to_cpu_array(uint32_t *buf, unsigned int words)
+static inline __unused void le32_to_cpu_array(uint32_t *buf, unsigned int words)
 {
         while (words--) {
 		*buf = le32_to_cpup(buf);
 		++buf;
         }
 }
-
-#if !defined(OCF_CHACHA20_POLY1305) || !defined(KERNEL_CHACHA20_POLY1305)
-static inline uint32_t rol32(uint32_t word, unsigned int shift)
+static inline __unused uint32_t rol32(uint32_t word, unsigned int shift)
 {
         return (word << (shift & 31)) | (word >> ((-shift) & 31));
 }
-#endif
-static inline uint32_t ror32(uint32_t word, unsigned int shift)
+static inline __unused uint32_t ror32(uint32_t word, unsigned int shift)
 {
 	return (word >> (shift & 31)) | (word << ((-shift) & 31));
 }
 
-#if !defined(OCF_CHACHA20_POLY1305) || !defined(KERNEL_CHACHA20_POLY1305)
-static void xor_cpy(uint8_t *dst, const uint8_t *src1, const uint8_t *src2,
-		    size_t len)
+#if defined(COMPAT_NEED_CHACHA20POLY1305) || defined(COMPAT_NEED_CHACHA20POLY1305_MBUF)
+static void xor_cpy(uint8_t *dst, const uint8_t *src1, const uint8_t *src2, size_t len)
 {
 	size_t i;
 
@@ -516,12 +507,11 @@ static void poly1305_final(struct poly1305_ctx *ctx,
 
 	explicit_bzero(ctx, sizeof(*ctx));
 }
-
-
-static const uint8_t pad0[16] = { 0 };
 #endif
 
-#ifndef KERNEL_CHACHA20_POLY1305
+#ifdef COMPAT_NEED_CHACHA20POLY1305
+static const uint8_t pad0[16] = { 0 };
+
 void
 chacha20poly1305_encrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
 			 const uint8_t *ad, const size_t ad_len,
@@ -602,65 +592,45 @@ chacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src, const size_t src_len,
 
 	return ret;
 }
+
+void
+xchacha20poly1305_encrypt(uint8_t *dst, const uint8_t *src,
+			  const size_t src_len, const uint8_t *ad,
+			  const size_t ad_len,
+			  const uint8_t nonce[XCHACHA20POLY1305_NONCE_SIZE],
+			  const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
+{
+	uint32_t derived_key[CHACHA20_KEY_WORDS];
+
+	hchacha20(derived_key, nonce, key);
+	cpu_to_le32_array(derived_key, ARRAY_SIZE(derived_key));
+	chacha20poly1305_encrypt(dst, src, src_len, ad, ad_len,
+				 get_unaligned_le64(nonce + 16),
+				 (uint8_t *)derived_key);
+	explicit_bzero(derived_key, CHACHA20POLY1305_KEY_SIZE);
+}
+
+bool
+xchacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src,
+			  const size_t src_len,  const uint8_t *ad,
+			  const size_t ad_len,
+			  const uint8_t nonce[XCHACHA20POLY1305_NONCE_SIZE],
+			  const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
+{
+	bool ret;
+	uint32_t derived_key[CHACHA20_KEY_WORDS];
+
+	hchacha20(derived_key, nonce, key);
+	cpu_to_le32_array(derived_key, ARRAY_SIZE(derived_key));
+	ret = chacha20poly1305_decrypt(dst, src, src_len, ad, ad_len,
+				       get_unaligned_le64(nonce + 16),
+				       (uint8_t *)derived_key);
+	explicit_bzero(derived_key, CHACHA20POLY1305_KEY_SIZE);
+	return ret;
+}
 #endif
 
-#ifdef OCF_CHACHA20_POLY1305
-static int
-crypto_callback(struct cryptop *crp)
-{
-	return (0);
-}
-
-int
-chacha20poly1305_encrypt_mbuf(struct mbuf *m, const uint64_t nonce,
-			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
-{
-	static char blank_tag[POLY1305_HASH_LEN];
-	struct cryptop crp;
-	int error;
-
-	if (!m_append(m, POLY1305_HASH_LEN, blank_tag))
-		return (ENOMEM);
-	crypto_initreq(&crp, chacha20_poly1305_sid);
-	crp.crp_op = CRYPTO_OP_ENCRYPT | CRYPTO_OP_COMPUTE_DIGEST;
-	crp.crp_flags = CRYPTO_F_IV_SEPARATE | CRYPTO_F_CBIMM;
-	crypto_use_mbuf(&crp, m);
-	crp.crp_payload_length = m->m_pkthdr.len - POLY1305_HASH_LEN;
-	crp.crp_digest_start = crp.crp_payload_length;
-	le64enc(crp.crp_iv, nonce);
-	crp.crp_cipher_key = key;
-	crp.crp_callback = crypto_callback;
-	error = crypto_dispatch(&crp);
-	crypto_destroyreq(&crp);
-	return (error);
-}
-
-int
-chacha20poly1305_decrypt_mbuf(struct mbuf *m, const uint64_t nonce,
-			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
-{
-	struct cryptop crp;
-	int error;
-
-	if (m->m_pkthdr.len < POLY1305_HASH_LEN)
-		return (EMSGSIZE);
-	crypto_initreq(&crp, chacha20_poly1305_sid);
-	crp.crp_op = CRYPTO_OP_DECRYPT | CRYPTO_OP_VERIFY_DIGEST;
-	crp.crp_flags = CRYPTO_F_IV_SEPARATE | CRYPTO_F_CBIMM;
-	crypto_use_mbuf(&crp, m);
-	crp.crp_payload_length = m->m_pkthdr.len - POLY1305_HASH_LEN;
-	crp.crp_digest_start = crp.crp_payload_length;
-	le64enc(crp.crp_iv, nonce);
-	crp.crp_cipher_key = key;
-	crp.crp_callback = crypto_callback;
-	error = crypto_dispatch(&crp);
-	crypto_destroyreq(&crp);
-	if (error != 0)
-		return (error);
-	m_adj(m, -POLY1305_HASH_LEN);
-	return (0);
-}
-#else
+#ifdef COMPAT_NEED_CHACHA20POLY1305_MBUF
 static inline int
 chacha20poly1305_crypt_mbuf(struct mbuf *m0, uint64_t nonce,
 			    const uint8_t key[CHACHA20POLY1305_KEY_SIZE], bool encrypt)
@@ -752,47 +722,65 @@ chacha20poly1305_decrypt_mbuf(struct mbuf *m, const uint64_t nonce,
 {
 	return chacha20poly1305_crypt_mbuf(m, nonce, key, false);
 }
-#endif
-
-#ifndef KERNEL_CHACHA20_POLY1305
-void
-xchacha20poly1305_encrypt(uint8_t *dst, const uint8_t *src,
-			  const size_t src_len, const uint8_t *ad,
-			  const size_t ad_len,
-			  const uint8_t nonce[XCHACHA20POLY1305_NONCE_SIZE],
-			  const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
+#else
+static int
+crypto_callback(struct cryptop *crp)
 {
-	uint32_t derived_key[CHACHA20_KEY_WORDS];
-
-	hchacha20(derived_key, nonce, key);
-	cpu_to_le32_array(derived_key, ARRAY_SIZE(derived_key));
-	chacha20poly1305_encrypt(dst, src, src_len, ad, ad_len,
-				 get_unaligned_le64(nonce + 16),
-				 (uint8_t *)derived_key);
-	explicit_bzero(derived_key, CHACHA20POLY1305_KEY_SIZE);
+	return (0);
 }
 
-bool
-xchacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src,
-			  const size_t src_len,  const uint8_t *ad,
-			  const size_t ad_len,
-			  const uint8_t nonce[XCHACHA20POLY1305_NONCE_SIZE],
-			  const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
+int
+chacha20poly1305_encrypt_mbuf(struct mbuf *m, const uint64_t nonce,
+			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
 {
-	bool ret;
-	uint32_t derived_key[CHACHA20_KEY_WORDS];
+	static char blank_tag[POLY1305_HASH_LEN];
+	struct cryptop crp;
+	int ret;
 
-	hchacha20(derived_key, nonce, key);
-	cpu_to_le32_array(derived_key, ARRAY_SIZE(derived_key));
-	ret = chacha20poly1305_decrypt(dst, src, src_len, ad, ad_len,
-				       get_unaligned_le64(nonce + 16),
-				       (uint8_t *)derived_key);
-	explicit_bzero(derived_key, CHACHA20POLY1305_KEY_SIZE);
-	return ret;
+	if (!m_append(m, POLY1305_HASH_LEN, blank_tag))
+		return (ENOMEM);
+	crypto_initreq(&crp, chacha20_poly1305_sid);
+	crp.crp_op = CRYPTO_OP_ENCRYPT | CRYPTO_OP_COMPUTE_DIGEST;
+	crp.crp_flags = CRYPTO_F_IV_SEPARATE | CRYPTO_F_CBIMM;
+	crypto_use_mbuf(&crp, m);
+	crp.crp_payload_length = m->m_pkthdr.len - POLY1305_HASH_LEN;
+	crp.crp_digest_start = crp.crp_payload_length;
+	le64enc(crp.crp_iv, nonce);
+	crp.crp_cipher_key = key;
+	crp.crp_callback = crypto_callback;
+	ret = crypto_dispatch(&crp);
+	crypto_destroyreq(&crp);
+	return (ret);
+}
+
+int
+chacha20poly1305_decrypt_mbuf(struct mbuf *m, const uint64_t nonce,
+			      const uint8_t key[CHACHA20POLY1305_KEY_SIZE])
+{
+	struct cryptop crp;
+	int ret;
+
+	if (m->m_pkthdr.len < POLY1305_HASH_LEN)
+		return (EMSGSIZE);
+	crypto_initreq(&crp, chacha20_poly1305_sid);
+	crp.crp_op = CRYPTO_OP_DECRYPT | CRYPTO_OP_VERIFY_DIGEST;
+	crp.crp_flags = CRYPTO_F_IV_SEPARATE | CRYPTO_F_CBIMM;
+	crypto_use_mbuf(&crp, m);
+	crp.crp_payload_length = m->m_pkthdr.len - POLY1305_HASH_LEN;
+	crp.crp_digest_start = crp.crp_payload_length;
+	le64enc(crp.crp_iv, nonce);
+	crp.crp_cipher_key = key;
+	crp.crp_callback = crypto_callback;
+	ret = crypto_dispatch(&crp);
+	crypto_destroyreq(&crp);
+	if (ret)
+		return (ret);
+	m_adj(m, -POLY1305_HASH_LEN);
+	return (0);
 }
 #endif
 
-
+#ifdef COMPAT_NEED_BLAKE2S
 static const uint32_t blake2s_iv[8] = {
 	0x6A09E667UL, 0xBB67AE85UL, 0x3C6EF372UL, 0xA54FF53AUL,
 	0x510E527FUL, 0x9B05688CUL, 0x1F83D9ABUL, 0x5BE0CD19UL
@@ -1001,9 +989,9 @@ void blake2s_hmac(uint8_t *out, const uint8_t *in, const uint8_t *key, const siz
 	explicit_bzero(x_key, BLAKE2S_BLOCK_SIZE);
 	explicit_bzero(i_hash, BLAKE2S_HASH_SIZE);
 }
+#endif
 
-
-#ifndef KERNEL_CURVE25519
+#ifdef COMPAT_NEED_CURVE25519
 /* Below here is fiat's implementation of x25519.
  *
  * Copyright (C) 2015-2016 The fiat-crypto Authors.
@@ -1867,20 +1855,17 @@ bool curve25519(uint8_t out[CURVE25519_KEY_SIZE],
 int
 crypto_init(void)
 {
-#ifdef OCF_CHACHA20_POLY1305
-	struct crypto_session_params csp;
-	int error;
-
-	memset(&csp, 0, sizeof(csp));
-	csp.csp_mode = CSP_MODE_AEAD;
-	csp.csp_ivlen = sizeof(uint64_t);
-	csp.csp_cipher_alg = CRYPTO_CHACHA20_POLY1305;
-	csp.csp_cipher_klen = CHACHA20POLY1305_KEY_SIZE;
-	csp.csp_flags = CSP_F_SEPARATE_AAD | CSP_F_SEPARATE_OUTPUT;
-	error = crypto_newsession(&chacha20_poly1305_sid, &csp,
-	    CRYPTOCAP_F_SOFTWARE);
-	if (error != 0)
-		return (error);
+#ifndef COMPAT_NEED_CHACHA20POLY1305_MBUF
+	struct crypto_session_params csp = {
+		.csp_mode = CSP_MODE_AEAD,
+		.csp_ivlen = sizeof(uint64_t),
+		.csp_cipher_alg = CRYPTO_CHACHA20_POLY1305,
+		.csp_cipher_klen = CHACHA20POLY1305_KEY_SIZE,
+		.csp_flags = CSP_F_SEPARATE_AAD | CSP_F_SEPARATE_OUTPUT
+	};
+	int ret = crypto_newsession(&chacha20_poly1305_sid, &csp, CRYPTOCAP_F_SOFTWARE);
+	if (ret != 0)
+		return (ret);
 #endif
 	return (0);
 }
@@ -1888,7 +1873,7 @@ crypto_init(void)
 void
 crypto_deinit(void)
 {
-#ifdef OCF_CHACHA20_POLY1305
+#ifndef COMPAT_NEED_CHACHA20POLY1305_MBUF
 	crypto_freesession(chacha20_poly1305_sid);
 #endif
 }
