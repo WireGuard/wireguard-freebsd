@@ -24,7 +24,7 @@
 #define COMPAT_NEED_BLAKE2S
 #endif
 
-#if __FreeBSD_version < 1400517
+#if __FreeBSD_version < 1400057
 #include <sys/sockbuf.h>
 #define sbcreatecontrol(a, b, c, d, e) sbcreatecontrol(a, b, c, d)
 #endif
