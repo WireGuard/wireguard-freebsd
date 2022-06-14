@@ -953,42 +953,6 @@ void blake2s(uint8_t *out, const uint8_t *in, const uint8_t *key,
 	blake2s_update(&state, in, inlen);
 	blake2s_final(&state, out);
 }
-
-void blake2s_hmac(uint8_t *out, const uint8_t *in, const uint8_t *key, const size_t outlen,
-		  const size_t inlen, const size_t keylen)
-{
-	struct blake2s_state state;
-	uint8_t x_key[BLAKE2S_BLOCK_SIZE] __aligned(sizeof(uint32_t)) = { 0 };
-	uint8_t i_hash[BLAKE2S_HASH_SIZE] __aligned(sizeof(uint32_t));
-	int i;
-
-	if (keylen > BLAKE2S_BLOCK_SIZE) {
-		blake2s_init(&state, BLAKE2S_HASH_SIZE);
-		blake2s_update(&state, key, keylen);
-		blake2s_final(&state, x_key);
-	} else
-		memcpy(x_key, key, keylen);
-
-	for (i = 0; i < BLAKE2S_BLOCK_SIZE; ++i)
-		x_key[i] ^= 0x36;
-
-	blake2s_init(&state, BLAKE2S_HASH_SIZE);
-	blake2s_update(&state, x_key, BLAKE2S_BLOCK_SIZE);
-	blake2s_update(&state, in, inlen);
-	blake2s_final(&state, i_hash);
-
-	for (i = 0; i < BLAKE2S_BLOCK_SIZE; ++i)
-		x_key[i] ^= 0x5c ^ 0x36;
-
-	blake2s_init(&state, BLAKE2S_HASH_SIZE);
-	blake2s_update(&state, x_key, BLAKE2S_BLOCK_SIZE);
-	blake2s_update(&state, i_hash, BLAKE2S_HASH_SIZE);
-	blake2s_final(&state, i_hash);
-
-	memcpy(out, i_hash, outlen);
-	explicit_bzero(x_key, BLAKE2S_BLOCK_SIZE);
-	explicit_bzero(i_hash, BLAKE2S_HASH_SIZE);
-}
 #endif
 
 #ifdef COMPAT_NEED_CURVE25519

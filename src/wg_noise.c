@@ -1189,6 +1189,43 @@ error:
 	return (ret);
 }
 
+static void
+hmac(uint8_t *out, const uint8_t *in, const uint8_t *key, const size_t outlen,
+     const size_t inlen, const size_t keylen)
+{
+	struct blake2s_state state;
+	uint8_t x_key[BLAKE2S_BLOCK_SIZE] __aligned(sizeof(uint32_t)) = { 0 };
+	uint8_t i_hash[BLAKE2S_HASH_SIZE] __aligned(sizeof(uint32_t));
+	int i;
+
+	if (keylen > BLAKE2S_BLOCK_SIZE) {
+		blake2s_init(&state, BLAKE2S_HASH_SIZE);
+		blake2s_update(&state, key, keylen);
+		blake2s_final(&state, x_key);
+	} else
+		memcpy(x_key, key, keylen);
+
+	for (i = 0; i < BLAKE2S_BLOCK_SIZE; ++i)
+		x_key[i] ^= 0x36;
+
+	blake2s_init(&state, BLAKE2S_HASH_SIZE);
+	blake2s_update(&state, x_key, BLAKE2S_BLOCK_SIZE);
+	blake2s_update(&state, in, inlen);
+	blake2s_final(&state, i_hash);
+
+	for (i = 0; i < BLAKE2S_BLOCK_SIZE; ++i)
+		x_key[i] ^= 0x5c ^ 0x36;
+
+	blake2s_init(&state, BLAKE2S_HASH_SIZE);
+	blake2s_update(&state, x_key, BLAKE2S_BLOCK_SIZE);
+	blake2s_update(&state, i_hash, BLAKE2S_HASH_SIZE);
+	blake2s_final(&state, i_hash);
+
+	memcpy(out, i_hash, outlen);
+	explicit_bzero(x_key, BLAKE2S_BLOCK_SIZE);
+	explicit_bzero(i_hash, BLAKE2S_HASH_SIZE);
+}
+
 /* Handshake helper functions */
 static void
 noise_kdf(uint8_t *a, uint8_t *b, uint8_t *c, const uint8_t *x,
@@ -1199,14 +1236,14 @@ noise_kdf(uint8_t *a, uint8_t *b, uint8_t *c, const uint8_t *x,
 	uint8_t sec[BLAKE2S_HASH_SIZE];
 
 	/* Extract entropy from "x" into sec */
-	blake2s_hmac(sec, x, ck, BLAKE2S_HASH_SIZE, x_len, NOISE_HASH_LEN);
+	hmac(sec, x, ck, BLAKE2S_HASH_SIZE, x_len, NOISE_HASH_LEN);
 
 	if (a == NULL || a_len == 0)
 		goto out;
 
 	/* Expand first key: key = sec, data = 0x1 */
 	out[0] = 1;
-	blake2s_hmac(out, out, sec, BLAKE2S_HASH_SIZE, 1, BLAKE2S_HASH_SIZE);
+	hmac(out, out, sec, BLAKE2S_HASH_SIZE, 1, BLAKE2S_HASH_SIZE);
 	memcpy(a, out, a_len);
 
 	if (b == NULL || b_len == 0)
@@ -1214,8 +1251,7 @@ noise_kdf(uint8_t *a, uint8_t *b, uint8_t *c, const uint8_t *x,
 
 	/* Expand second key: key = sec, data = "a" || 0x2 */
 	out[BLAKE2S_HASH_SIZE] = 2;
-	blake2s_hmac(out, out, sec, BLAKE2S_HASH_SIZE, BLAKE2S_HASH_SIZE + 1,
-			BLAKE2S_HASH_SIZE);
+	hmac(out, out, sec, BLAKE2S_HASH_SIZE, BLAKE2S_HASH_SIZE + 1, BLAKE2S_HASH_SIZE);
 	memcpy(b, out, b_len);
 
 	if (c == NULL || c_len == 0)
@@ -1223,8 +1259,7 @@ noise_kdf(uint8_t *a, uint8_t *b, uint8_t *c, const uint8_t *x,
 
 	/* Expand third key: key = sec, data = "b" || 0x3 */
 	out[BLAKE2S_HASH_SIZE] = 3;
-	blake2s_hmac(out, out, sec, BLAKE2S_HASH_SIZE, BLAKE2S_HASH_SIZE + 1,
-			BLAKE2S_HASH_SIZE);
+	hmac(out, out, sec, BLAKE2S_HASH_SIZE, BLAKE2S_HASH_SIZE + 1, BLAKE2S_HASH_SIZE);
 	memcpy(c, out, c_len);
 
 out:

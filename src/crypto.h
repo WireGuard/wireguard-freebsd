@@ -131,9 +131,6 @@ void blake2s_final(struct blake2s_state *state, uint8_t *out);
 
 void blake2s(uint8_t *out, const uint8_t *in, const uint8_t *key,
 	     const size_t outlen, const size_t inlen, const size_t keylen);
-
-void blake2s_hmac(uint8_t *out, const uint8_t *in, const uint8_t *key,
-		  const size_t outlen, const size_t inlen, const size_t keylen);
 #endif
 
 #ifdef COMPAT_NEED_CURVE25519
