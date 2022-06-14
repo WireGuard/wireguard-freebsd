@@ -939,20 +939,6 @@ void blake2s_final(struct blake2s_state *state, uint8_t *out)
 	memcpy(out, state->h, state->outlen);
 	explicit_bzero(state, sizeof(*state));
 }
-
-void blake2s(uint8_t *out, const uint8_t *in, const uint8_t *key,
-	     const size_t outlen, const size_t inlen, const size_t keylen)
-{
-	struct blake2s_state state;
-
-	if (keylen)
-		blake2s_init_key(&state, outlen, key, keylen);
-	else
-		blake2s_init(&state, outlen);
-
-	blake2s_update(&state, in, inlen);
-	blake2s_final(&state, out);
-}
 #endif
 
 #ifdef COMPAT_NEED_CURVE25519
