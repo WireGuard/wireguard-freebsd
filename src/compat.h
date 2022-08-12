@@ -7,6 +7,12 @@
  */
 
 #include <sys/param.h>
+#include <machine/atomic.h>
+
+#ifndef atomic_load_bool
+#define	atomic_load_bool(p)	(*(volatile _Bool *)(p))
+#define	atomic_store_bool(p, v)	(*(volatile _Bool *)(p) = (_Bool)(v))
+#endif
 
 #if (__FreeBSD_version < 1400036 && __FreeBSD_version >= 1400000) || __FreeBSD_version < 1300519
 #define COMPAT_NEED_CHACHA20POLY1305_MBUF
