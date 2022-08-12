@@ -542,13 +542,14 @@ wg_aip_add(struct wg_softc *sc, struct wg_peer *peer, sa_family_t af, const void
 	struct radix_node_head	*root;
 	struct radix_node	*node;
 	struct wg_aip		*aip;
-	int			 i, ret = 0;
+	int			 ret = 0;
 
 	aip = malloc(sizeof(*aip), M_WG, M_WAITOK | M_ZERO);
 	aip->a_peer = peer;
 	aip->a_af = af;
 
 	switch (af) {
+#ifdef INET
 	case AF_INET:
 		if (cidr > 32) cidr = 32;
 		root = sc->sc_aip4;
@@ -557,13 +558,14 @@ wg_aip_add(struct wg_softc *sc, struct wg_peer *peer, sa_family_t af, const void
 		aip->a_addr.ip &= aip->a_mask.ip;
 		aip->a_addr.length = aip->a_mask.length = offsetof(struct aip_addr, in) + sizeof(struct in_addr);
 		break;
+#endif
 #ifdef INET6
 	case AF_INET6:
 		if (cidr > 128) cidr = 128;
 		root = sc->sc_aip6;
 		aip->a_addr.in6 = *(const struct in6_addr *)addr;
 		in6_prefixlen2mask(&aip->a_mask.in6, cidr);
-		for (i = 0; i < 4; i++)
+		for (int i = 0; i < 4; i++)
 			aip->a_addr.ip6[i] &= aip->a_mask.ip6[i];
 		aip->a_addr.length = aip->a_mask.length = offsetof(struct aip_addr, in6) + sizeof(struct in6_addr);
 		break;
@@ -671,7 +673,6 @@ wg_aip_remove_all(struct wg_softc *sc, struct wg_peer *peer)
 static int
 wg_socket_init(struct wg_softc *sc, in_port_t port)
 {
-	struct thread *td = curthread;
 	struct ucred *cred = sc->sc_ucred;
 	struct socket *so4 = NULL, *so6 = NULL;
 	int rc;
@@ -689,7 +690,8 @@ wg_socket_init(struct wg_softc *sc, in_port_t port)
 	 * functionally attached to a foreign vnet as the jail's only interface
 	 * to the network.
 	 */
-	rc = socreate(AF_INET, &so4, SOCK_DGRAM, IPPROTO_UDP, cred, td);
+#ifdef INET
+	rc = socreate(AF_INET, &so4, SOCK_DGRAM, IPPROTO_UDP, cred, curthread);
 	if (rc)
 		goto out;
 
@@ -699,9 +701,10 @@ wg_socket_init(struct wg_softc *sc, in_port_t port)
 	 * This should never happen with a new socket.
 	 */
 	MPASS(rc == 0);
+#endif
 
 #ifdef INET6
-	rc = socreate(AF_INET6, &so6, SOCK_DGRAM, IPPROTO_UDP, cred, td);
+	rc = socreate(AF_INET6, &so6, SOCK_DGRAM, IPPROTO_UDP, cred, curthread);
 	if (rc)
 		goto out;
 	rc = udp_set_kernel_tunneling(so6, (udp_tun_func_t)wg_input, NULL, sc);
@@ -1930,8 +1933,12 @@ static bool
 wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
     const struct sockaddr *sa, void *_sc)
 {
+#ifdef INET
 	const struct sockaddr_in	*sin;
+#endif
+#ifdef INET6
 	const struct sockaddr_in6	*sin6;
+#endif
 	struct noise_remote		*remote;
 	struct wg_pkt_data		*data;
 	struct wg_packet		*pkt;
@@ -1964,16 +1971,24 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 	}
 
 	/* Save send/recv address and port for later. */
-	if (sa->sa_family == AF_INET) {
+	switch (sa->sa_family) {
+#ifdef INET
+	case AF_INET:
 		sin = (const struct sockaddr_in *)sa;
 		pkt->p_endpoint.e_remote.r_sin = sin[0];
 		pkt->p_endpoint.e_local.l_in = sin[1].sin_addr;
-	} else if (sa->sa_family == AF_INET6) {
+		break;
+#endif
+#ifdef INET6
+	case AF_INET6:
 		sin6 = (const struct sockaddr_in6 *)sa;
 		pkt->p_endpoint.e_remote.r_sin6 = sin6[0];
 		pkt->p_endpoint.e_local.l_in6 = sin6[1].sin6_addr;
-	} else
+		break;
+#endif
+	default:
 		goto error;
+	}
 
 	if ((m->m_pkthdr.len == sizeof(struct wg_pkt_initiation) &&
 		*mtod(m, uint32_t *) == WG_PKT_INITIATION) ||
@@ -2054,16 +2069,23 @@ static inline void
 xmit_err(struct ifnet *ifp, struct mbuf *m, struct wg_packet *pkt, sa_family_t af)
 {
 	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
-	if (af == AF_INET) {
+	switch (af) {
+#ifdef INET
+	case AF_INET:
 		icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_HOST, 0, 0);
 		if (pkt)
 			pkt->p_mbuf = NULL;
 		m = NULL;
-	} else if (af == AF_INET6) {
+		break;
+#endif
+#ifdef INET6
+	case AF_INET6:
 		icmp6_error(m, ICMP6_DST_UNREACH, 0, 0);
 		if (pkt)
 			pkt->p_mbuf = NULL;
 		m = NULL;
+		break;
+#endif
 	}
 	if (pkt)
 		wg_packet_free(pkt);
