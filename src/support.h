@@ -23,14 +23,6 @@
 #define IFT_WIREGUARD IFT_PPP
 #endif
 
-#ifndef ck_pr_store_bool
-#define ck_pr_store_bool(dst, val) ck_pr_store_8((uint8_t *)(dst), (uint8_t)(val))
-#endif
-
-#ifndef ck_pr_load_bool
-#define ck_pr_load_bool(src) ((bool)ck_pr_load_8((uint8_t *)(src)))
-#endif
-
 static inline int
 sogetsockaddr(struct socket *so, struct sockaddr **nam)
 {
