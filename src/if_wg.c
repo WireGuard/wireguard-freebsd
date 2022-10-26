@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+/* SPDX-License-Identifier: ISC
  *
  * Copyright (C) 2015-2021 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  * Copyright (C) 2019-2021 Matt Dunwoodie <ncon@noconroy.net>
